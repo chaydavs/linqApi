@@ -59,6 +59,14 @@ def process_message(chat_id: str, sender: str, text: str, message_id: str, attac
             name = text.split("for ", 1)[-1] if "for " in text else text.split("draft ", 1)[-1]
             handle_draft_request(chat_id, sender, name.strip())
 
+        elif _is_visual_send(text_lower):
+            name, hint = _parse_visual_command(text)
+            handle_visual_follow_up(chat_id, sender, name, hint)
+
+        elif text_lower.startswith("follow up with "):
+            name, hint = _parse_follow_up_command(text)
+            handle_visual_follow_up(chat_id, sender, name, hint)
+
         elif text_lower == "send" or text_lower.startswith("send to "):
             handle_send(chat_id, sender, text)
 
@@ -255,8 +263,10 @@ def handle_help(chat_id: str):
         "• summary — see everyone you've met today\n"
         "• /update — morning briefing with replies and pending follow-ups\n"
         "• draft for [name] — review AI-generated follow-up\n"
-        "• send — send the last draft\n"
+        "• send — send the last draft as text\n"
         "• send to [name] — send draft to specific person\n"
+        "• send [name] something — generate & send visual tiles\n"
+        "• follow up with [name] — visual follow-up with context\n"
         "• edit [changes] — modify the last shown draft\n"
         "• contacts — list all contacts\n"
         "• help — this message\n\n"
@@ -283,6 +293,71 @@ def handle_list(chat_id: str, sender: str):
         lines.append(f"• {c['name']} — {c['company']} [{status}]")
 
     send_message(chat_id, "\n".join(lines))
+
+
+def _is_visual_send(text_lower: str) -> bool:
+    """Detect if the user wants visual tiles sent."""
+    if not text_lower.startswith("send "):
+        return False
+    visual_words = ("something", "visual", "tiles", "deck", "slides")
+    return any(w in text_lower for w in visual_words)
+
+
+def _parse_visual_command(text: str) -> tuple[str, str]:
+    """Parse 'send Sarah something about scaling' into (name, hint)."""
+    text_lower = text.lower()
+    # Remove "send " prefix
+    rest = text[5:].strip()
+
+    # Try to split on visual keywords to find where name ends
+    for keyword in ("something", "visual", "tiles", "deck", "slides"):
+        if keyword in rest.lower():
+            parts = rest.lower().split(keyword, 1)
+            name = parts[0].strip().rstrip(",").strip()
+            hint = parts[1].strip().lstrip("about").lstrip("on").strip() if len(parts) > 1 else ""
+            return name, hint
+
+    return rest, ""
+
+
+def _parse_follow_up_command(text: str) -> tuple[str, str]:
+    """Parse 'follow up with Sarah, include something about scaling'."""
+    rest = text[len("follow up with "):].strip()
+
+    for separator in (",", " include ", " with ", " about "):
+        if separator in rest.lower():
+            idx = rest.lower().index(separator)
+            name = rest[:idx].strip()
+            hint = rest[idx + len(separator):].strip()
+            return name, hint
+
+    return rest, ""
+
+
+def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: str = None):
+    """Generate and send visual tile deck to a contact."""
+    from tiles.engine import generate_and_send_deck
+
+    contact = find_contact_by_name(sender, name_query)
+    if not contact:
+        send_message(chat_id, f"Can't find anyone named '{name_query}'. Try 'contacts' to see your list.")
+        return
+
+    if not contact.get("phone"):
+        send_message(chat_id, f"No phone number for {contact['name']}. Send me their number first.")
+        return
+
+    send_message(chat_id, f"🎨 Generating tiles for {first_name(contact)}...")
+
+    result = generate_and_send_deck(contact, hint=hint)
+
+    if result.get("success"):
+        deck_type = result.get("deck_type", "")
+        num = result.get("num_tiles", 0)
+        update_contact(contact["id"], sent=True, sent_at=datetime.now().isoformat())
+        send_message(chat_id, f"✅ Sent {num} {deck_type} tiles to {contact['name']}")
+    else:
+        send_message(chat_id, f"❌ Couldn't generate tiles: {result.get('error', 'unknown')}")
 
 
 # === FLASK WEBHOOK ENDPOINT ===

@@ -15,6 +15,11 @@ iPhone iMessage → Linq Blue API → webhook POST → Flask → Claude/Whisper 
 - `linq_client.py` — Linq Blue v3 API client (send messages, typing indicators, reactions)
 - `voice.py` — Whisper transcription for voice memos
 - `config.py` — Environment variables and constants
+- `tiles/` — Visual tile deck engine
+  - `prompts.py` — Claude prompts, deck guidelines, accent colors, gradients
+  - `renderer.py` — HTML template rendering (900x1200px self-contained pages)
+  - `image_converter.py` — Playwright HTML-to-PNG conversion
+  - `engine.py` — Full pipeline: context → deck type → content → render → send
 
 ## Running
 ```bash
@@ -49,6 +54,14 @@ python3 app.py
 - All handlers log exceptions via `logger.exception()`
 - Linq helper functions log warnings on failure, don't raise
 - OpenAI client is lazy-initialized (doesn't crash without API key at import)
+
+### Visual Tiles
+- 5 deck types: hook, roi, proof, personal, competitive
+- Tile content generated via `_call_claude()` in `brain.py` — same pattern as other Claude calls
+- HTML rendered at 900x1200px with DM Sans font, dark gradients, single accent color per deck
+- Playwright converts HTML to PNG screenshots for iMessage sending
+- Add new tile types in `renderer.py:_tile_inner_html()`, new deck types in `prompts.py`
+- After adding Playwright: `playwright install chromium`
 
 ### Git Workflow
 - Work on `test1` branch, push after every change
