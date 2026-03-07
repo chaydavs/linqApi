@@ -82,8 +82,11 @@ def process_message(chat_id: str, sender: str, text: str, message_id: str, attac
             else:
                 send_message(chat_id, "Couldn't process that voice memo - no audio URL found.")
 
-        else:
+        elif text and text.strip():
             handle_brain_dump(chat_id, sender, text, message_id)
+
+        else:
+            send_message(chat_id, "Send me a brain dump about someone you met, or say 'help' for commands.")
 
     except Exception:
         logger.exception("Error processing message from %s", sender)
@@ -237,9 +240,9 @@ def handle_edit(chat_id: str, sender: str, text: str):
 
     edit_instruction = text[5:].strip()
     draft = draft_follow_up({**contact, "notes": contact["notes"] + f" | Edit request: {edit_instruction}"})
-    update_contact(contact["id"], draft=draft)
+    updated = update_contact(contact["id"], draft=draft)
 
-    send_message(chat_id, _format_draft_preview(contact, "Reply SEND to send now, or edit again"))
+    send_message(chat_id, _format_draft_preview(updated or contact, "Reply SEND to send now, or edit again"))
 
 
 def handle_help(chat_id: str):

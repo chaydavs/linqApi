@@ -26,8 +26,13 @@ def send_message(chat_id: str, text: str, effect: str = None) -> dict:
     payload = {"text": text}
     if effect:
         payload["effect"] = effect
-    resp = session.post(url, json=payload)
-    return resp.json()
+    try:
+        resp = session.post(url, json=payload)
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as e:
+        logger.error("send_message failed for chat %s: %s", chat_id, e)
+        return {"error": str(e)}
 
 
 def send_message_to_phone(phone_number: str, text: str) -> dict:
