@@ -3,10 +3,7 @@
 import re
 from html import escape as h
 
-from tiles.prompts import ACCENT_COLORS, DECK_GRADIENTS
-
-TILE_WIDTH = 900
-TILE_HEIGHT = 1200
+from tiles.prompts import ACCENT_COLORS, DECK_GRADIENTS, TILE_WIDTH, TILE_HEIGHT
 
 _VALID_HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _DEFAULT_ACCENT = "#A78BFA"

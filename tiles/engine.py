@@ -2,7 +2,6 @@
 
 import json
 import logging
-import time
 from typing import Optional
 
 from brain import _call_claude, _clean_json_response
@@ -128,15 +127,12 @@ def generate_and_send_deck(contact: dict, hint: Optional[str] = None) -> dict:
         # Step 5: Send via Linq
         intro = f"Hey {get_first_name(contact)} — thought you'd find this interesting 👇"
         send_message_to_phone(phone, intro)
-        time.sleep(0.5)
 
         # Send each tile image
         for img_path in image_paths:
             _send_image_to_phone(phone, img_path)
-            time.sleep(0.3)
 
         # Follow-up text
-        time.sleep(0.5)
         outro = contact.get("draft") or "Let me know what you think!"
         send_message_to_phone(phone, outro)
 

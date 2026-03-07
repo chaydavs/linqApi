@@ -5,7 +5,14 @@ from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 
 logger = logging.getLogger(__name__)
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+_client = None
+
+
+def _get_client() -> anthropic.Anthropic:
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    return _client
 
 PARSE_SYSTEM_PROMPT = """You are a contact parsing assistant. Users will send you raw,
 unstructured text (or transcribed voice memos) about people they just met at a conference.
@@ -81,7 +88,7 @@ def _clean_json_response(text: str) -> str:
 
 def _call_claude(system: str, user_content: str, max_tokens: int = 500) -> str:
     """Make a Claude API call and return the text response."""
-    response = client.messages.create(
+    response = _get_client().messages.create(
         model=CLAUDE_MODEL,
         max_tokens=max_tokens,
         system=system,

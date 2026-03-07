@@ -85,6 +85,9 @@ DECK_GUIDELINES = {
 }
 
 
+TILE_WIDTH = 900
+TILE_HEIGHT = 1200
+
 ACCENT_COLORS = {
     "hook": "#A78BFA",
     "roi": "#38BDF8",

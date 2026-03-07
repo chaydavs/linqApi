@@ -4,10 +4,9 @@ import logging
 import os
 import tempfile
 
-logger = logging.getLogger(__name__)
+from tiles.prompts import TILE_WIDTH, TILE_HEIGHT
 
-TILE_WIDTH = 900
-TILE_HEIGHT = 1200
+logger = logging.getLogger(__name__)
 
 
 def html_to_image(html: str) -> str:

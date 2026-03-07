@@ -1,4 +1,5 @@
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from flask import Flask, request, jsonify
@@ -30,6 +31,7 @@ app = Flask(__name__)
 executor = ThreadPoolExecutor(max_workers=10)
 
 # Track which contact was last shown a draft for (simple state for "send" command)
+_draft_lock = threading.Lock()
 last_draft_shown = {}  # sender_phone -> contact_id
 
 
@@ -194,7 +196,8 @@ def handle_draft_request(chat_id: str, sender: str, name_query: str):
         draft = draft_follow_up(contact)
         update_contact(contact["id"], draft=draft)
 
-    last_draft_shown[sender] = contact["id"]
+    with _draft_lock:
+        last_draft_shown[sender] = contact["id"]
 
     if contact.get("phone"):
         footer = "Reply SEND to send now\nReply LATER to hold\nOr tell me what to change"
@@ -211,8 +214,11 @@ def handle_send(chat_id: str, sender: str, text: str):
     if text.lower().startswith("send to "):
         name = text[8:].strip()
         contact = find_contact_by_name(sender, name)
-    elif sender in last_draft_shown:
-        contact = get_contact_by_id(last_draft_shown[sender])
+    else:
+        with _draft_lock:
+            contact_id = last_draft_shown.get(sender)
+        if contact_id:
+            contact = get_contact_by_id(contact_id)
 
     if not contact:
         send_message(chat_id, "Send what? Review a draft first — say 'draft for [name]'")
@@ -237,11 +243,13 @@ def handle_send(chat_id: str, sender: str, text: str):
 
 def handle_edit(chat_id: str, sender: str, text: str):
     """Handle edit requests for drafts."""
-    if sender not in last_draft_shown:
+    with _draft_lock:
+        contact_id = last_draft_shown.get(sender)
+    if not contact_id:
         send_message(chat_id, "Nothing to edit. Review a draft first — say 'draft for [name]'")
         return
 
-    contact = get_contact_by_id(last_draft_shown[sender])
+    contact = get_contact_by_id(contact_id)
     if not contact:
         send_message(chat_id, "Contact not found. Try 'draft for [name]' again.")
         return

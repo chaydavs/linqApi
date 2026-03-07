@@ -28,7 +28,7 @@ def create_contact(user_phone: str, parsed_data: dict) -> dict:
         "follow_up_date": parsed_data.get("follow_up_date", ""),
         "follow_up_action": parsed_data.get("follow_up_action", ""),
         "temperature": parsed_data.get("temperature", "warm"),
-        "personal_details": parsed_data.get("personal_details", []),
+        "personal_details": list(parsed_data.get("personal_details", [])),
         "created_at": datetime.now().isoformat(),
         "draft": None,
         "sent": False,
