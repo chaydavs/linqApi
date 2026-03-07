@@ -8,7 +8,9 @@
       "Bash(source:*)",
       "Bash(test:*)",
       "Bash(grep:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch:*)",
+      "Bash(python:*)"
     ]
   }
 }

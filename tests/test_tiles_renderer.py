@@ -11,7 +11,6 @@ import os
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from tiles.renderer import _base_css, _tile_inner_html, render_tile_html, TILE_WIDTH, TILE_HEIGHT
 from tiles.prompts import DECK_GRADIENTS, ACCENT_COLORS
 
