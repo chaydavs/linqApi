@@ -14,7 +14,8 @@ Everything lives in one iMessage thread with your Linq number:
 2. **Recall** — Text `summary` to see everyone you met, organized by priority
 3. **Draft** — Text `draft for Sarah` to review an AI-generated personal follow-up
 4. **Send** — Text `send` to deliver it as a real iMessage to Sarah's phone
-5. **Update** — Text `/update` the next morning for a status briefing
+5. **Visual** — Text `send Sarah something about scaling` to generate and send AI visual tiles
+6. **Update** — Text `/update` the next morning for a status briefing
 
 ## Tech Stack
 
@@ -24,6 +25,7 @@ Everything lives in one iMessage thread with your Linq number:
 | AI Brain | Claude API (Sonnet) |
 | Voice | OpenAI Whisper API |
 | Messaging | Linq Blue v3 API |
+| Visual Tiles | Playwright + Chromium |
 | Tunnel | ngrok |
 
 ## Setup
@@ -36,6 +38,7 @@ cd linqApi
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+playwright install chromium
 ```
 
 ### 2. Configure environment
@@ -70,18 +73,51 @@ Set your ngrok URL + `/webhook` as the webhook URL in the Linq sandbox dashboard
 | Command | What it does |
 |---|---|
 | *(any text)* | Parse as brain dump, log contact |
+| *(voice memo)* | Transcribe with Whisper, then parse as brain dump |
 | `summary` | Day summary organized by priority |
 | `/update` | Morning briefing — replies, pending, today's actions |
 | `draft for [name]` | Review AI-generated follow-up |
 | `send` | Send last shown draft |
 | `send to [name]` | Send draft for specific person |
+| `send [name] something` | Generate and send visual tile deck |
+| `follow up with [name]` | Visual follow-up with context tiles |
 | `edit [changes]` | Modify the last shown draft |
 | `contacts` | List all logged contacts |
 | `help` | Show command list |
 
-## Testing Locally
+## Visual Tiles
 
-Simulate a webhook without Linq:
+LinqUp can generate AI-powered visual micro-presentations sent as image tiles via iMessage. Each deck tells a story tailored to the contact.
+
+### Deck Types
+
+| Type | When used | Tiles |
+|---|---|---|
+| **Hook** | Lead has a pain point, needs re-engagement | 5 tiles |
+| **ROI** | Pushed back on pricing, needs justification | 5 tiles |
+| **Proof** | Wants social proof, case studies, validation | 4 tiles |
+| **Personal** | Strong personal connection captured | 3 tiles |
+| **Competitive** | Evaluating alternatives or using a competitor | 4 tiles |
+
+### How it works
+
+```
+Contact context → Claude selects deck type → Claude generates tile content (JSON)
+→ HTML rendering (900x1200px, DM Sans, dark gradients) → Playwright screenshots
+→ PNG images sent via Linq iMessage API
+```
+
+You can hint the deck type: `send Sarah something about ROI` will force an ROI deck.
+
+## Testing
+
+```bash
+python -m pytest tests/ -v
+```
+
+216 tests covering routing, tile rendering, engine logic, prompts, and image conversion.
+
+### Simulate a webhook locally
 
 ```bash
 curl -X POST http://localhost:3000/webhook \
@@ -107,6 +143,7 @@ curl -X POST http://localhost:3000/webhook \
                                           │  contacts.py → Contact Store │
                                           │  linq_client → Linq API      │
                                           │  voice.py    → Whisper API   │
+                                          │  tiles/      → Visual Engine │
                                           └──────────────────────────────┘
 ```
 
@@ -119,6 +156,12 @@ curl -X POST http://localhost:3000/webhook \
 ├── linq_client.py      # Linq API client
 ├── voice.py            # Whisper transcription
 ├── config.py           # Environment variables, constants
+├── tiles/
+│   ├── prompts.py      # Claude prompts, deck guidelines, constants
+│   ├── renderer.py     # HTML template rendering (XSS-safe)
+│   ├── image_converter.py  # Playwright HTML → PNG
+│   └── engine.py       # Full pipeline orchestration
+├── tests/              # pytest suite (216 tests)
 ├── requirements.txt    # Python dependencies
 ├── CLAUDE.md           # Development instructions
 ├── .env.example        # API key template
