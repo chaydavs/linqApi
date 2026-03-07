@@ -3,8 +3,10 @@
 import json
 import logging
 import time
+from typing import Optional
 
 from brain import _call_claude, _clean_json_response
+from contacts import first_name as get_first_name
 from tiles.prompts import (
     ACCENT_COLORS,
     DECK_GUIDELINES,
@@ -30,7 +32,7 @@ def assemble_tile_context(contact: dict) -> dict:
     }
 
 
-def select_deck_type(context: dict, hint: str = None) -> str:
+def select_deck_type(context: dict, hint: Optional[str] = None) -> str:
     """Use Claude to pick the best deck type for this contact."""
     if hint:
         hint_lower = hint.lower()
@@ -52,7 +54,7 @@ def select_deck_type(context: dict, hint: str = None) -> str:
     return "hook"
 
 
-def generate_tile_content(context: dict, deck_type: str, hint: str = None) -> list[dict]:
+def generate_tile_content(context: dict, deck_type: str, hint: Optional[str] = None) -> list[dict]:
     """Use Claude to generate structured content for each tile."""
     accent = ACCENT_COLORS.get(deck_type, "#A78BFA")
     guidelines = DECK_GUIDELINES.get(deck_type, DECK_GUIDELINES["hook"])
@@ -74,22 +76,29 @@ def generate_tile_content(context: dict, deck_type: str, hint: str = None) -> li
     )
 
     cleaned = _clean_json_response(raw)
-    tiles = json.loads(cleaned)
+    try:
+        tiles = json.loads(cleaned)
+    except json.JSONDecodeError:
+        logger.warning("Tile JSON parse failed, retrying once")
+        raw = _call_claude(
+            "You are a sales deck content strategist. Return only valid JSON arrays.",
+            prompt,
+            max_tokens=1500,
+        )
+        tiles = json.loads(_clean_json_response(raw))
 
-    # Ensure every tile has the accent color
-    for tile in tiles:
-        if "accent" not in tile:
-            tile["accent"] = accent
-
-    return tiles
+    # Ensure every tile has the accent color (immutable — new list of new dicts)
+    return [
+        {**tile, "accent": tile.get("accent", accent)} for tile in tiles
+    ]
 
 
-def generate_and_send_deck(contact: dict, hint: str = None) -> dict:
+def generate_and_send_deck(contact: dict, hint: Optional[str] = None) -> dict:
     """Full pipeline: context → deck type → content → render → send.
 
     Returns dict with success status and metadata.
     """
-    from linq_client import send_message, send_message_to_phone, start_typing, stop_typing
+    from linq_client import send_message_to_phone
 
     phone = contact.get("phone")
     if not phone:
@@ -98,15 +107,15 @@ def generate_and_send_deck(contact: dict, hint: str = None) -> dict:
     try:
         # Step 1: Assemble context
         context = assemble_tile_context(contact)
-        logger.info("Tile context assembled for %s", contact["name"])
+        logger.info("Tile context assembled for %s", contact.get("name"))
 
         # Step 2: Select deck type
         deck_type = select_deck_type(context, hint)
-        logger.info("Selected deck type: %s for %s", deck_type, contact["name"])
+        logger.info("Selected deck type: %s for %s", deck_type, contact.get("name"))
 
         # Step 3: Generate tile content
         tiles = generate_tile_content(context, deck_type, hint)
-        logger.info("Generated %d tiles for %s", len(tiles), contact["name"])
+        logger.info("Generated %d tiles for %s", len(tiles), contact.get("name"))
 
         # Step 4: Render HTML → images
         html_pages = [
@@ -117,9 +126,7 @@ def generate_and_send_deck(contact: dict, hint: str = None) -> dict:
         logger.info("Rendered %d tile images", len(image_paths))
 
         # Step 5: Send via Linq
-        # First create a chat / send intro text
-        first_name = contact["name"].split()[0] if contact["name"] else "there"
-        intro = f"Hey {first_name} — thought you'd find this interesting 👇"
+        intro = f"Hey {get_first_name(contact)} — thought you'd find this interesting 👇"
         send_message_to_phone(phone, intro)
         time.sleep(0.5)
 
@@ -153,37 +160,23 @@ def _send_image_to_phone(phone: str, image_path: str):
     NOTE: The exact Linq API endpoint for image/media sending needs
     to be confirmed against their sandbox docs. This is a best-guess
     implementation that may need adjustment.
-
-    Possible approaches:
-    1. Base64 encode and send as attachment in message body
-    2. Upload to a hosting service first, send the URL
-    3. Use a Linq media upload endpoint if one exists
     """
     import base64
-    from linq_client import session, LINQ_BASE_URL
+    from linq_client import _linq_request
 
     with open(image_path, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
 
-    # Attempt: send as message with attachment
-    url = f"{LINQ_BASE_URL}/messages"
-    payload = {
+    _linq_request("POST", "/messages", {
         "to": phone,
         "attachments": [{
             "type": "image/png",
             "data": image_data,
         }],
-    }
-
-    try:
-        resp = session.post(url, json=payload)
-        if resp.status_code not in (200, 201):
-            logger.warning("Image send returned %d — may need API adjustment", resp.status_code)
-    except Exception as e:
-        logger.warning("Failed to send image to %s: %s", phone, e)
+    })
 
 
-def generate_preview_deck(contact: dict, hint: str = None) -> list[dict]:
+def generate_preview_deck(contact: dict, hint: Optional[str] = None) -> dict:
     """Generate tile content without rendering/sending — for preview."""
     context = assemble_tile_context(contact)
     deck_type = select_deck_type(context, hint)

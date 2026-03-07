@@ -305,16 +305,16 @@ def _is_visual_send(text_lower: str) -> bool:
 
 def _parse_visual_command(text: str) -> tuple[str, str]:
     """Parse 'send Sarah something about scaling' into (name, hint)."""
-    text_lower = text.lower()
     # Remove "send " prefix
     rest = text[5:].strip()
 
     # Try to split on visual keywords to find where name ends
     for keyword in ("something", "visual", "tiles", "deck", "slides"):
         if keyword in rest.lower():
-            parts = rest.lower().split(keyword, 1)
-            name = parts[0].strip().rstrip(",").strip()
-            hint = parts[1].strip().lstrip("about").lstrip("on").strip() if len(parts) > 1 else ""
+            idx = rest.lower().index(keyword)
+            name = rest[:idx].strip().rstrip(",").strip()
+            hint_raw = rest[idx + len(keyword):]
+            hint = hint_raw.strip().lstrip("about").lstrip("on").strip() if hint_raw else ""
             return name, hint
 
     return rest, ""

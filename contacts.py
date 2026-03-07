@@ -42,20 +42,21 @@ def create_contact(user_phone: str, parsed_data: dict) -> dict:
             user_contacts[user_phone] = []
         user_contacts[user_phone].append(contact_id)
 
-    return contact
+    return dict(contact)
 
 
 def get_user_contacts(user_phone: str) -> list:
     """Get all contacts for a user."""
     with _lock:
         ids = user_contacts.get(user_phone, [])
-        return [c for cid in ids if (c := contacts.get(cid)) is not None]
+        return [dict(c) for cid in ids if (c := contacts.get(cid)) is not None]
 
 
 def get_contact_by_id(contact_id: str) -> Optional[dict]:
     """Get a contact by its ID."""
     with _lock:
-        return contacts.get(contact_id)
+        contact = contacts.get(contact_id)
+        return dict(contact) if contact else None
 
 
 def update_contact(contact_id: str, **updates) -> Optional[dict]:
@@ -64,8 +65,8 @@ def update_contact(contact_id: str, **updates) -> Optional[dict]:
         contact = contacts.get(contact_id)
         if not contact:
             return None
-        contact.update(updates)
-        return contact
+        contacts[contact_id] = {**contact, **updates}
+        return dict(contacts[contact_id])
 
 
 def find_contact_by_name(user_phone: str, name_query: str) -> Optional[dict]:
