@@ -21,7 +21,7 @@ Everything lives in one iMessage thread with your Linq number:
 | Component | Technology |
 |---|---|
 | Server | Python 3.11 + Flask |
-| AI Brain | Claude API (Sonnet) |
+| AI Brain | LLM API (NLP parsing + drafting) |
 | Voice | OpenAI Whisper API |
 | Messaging | Linq Blue v3 API |
 | Tunnel | ngrok |
@@ -103,7 +103,7 @@ curl -X POST http://localhost:3000/webhook \
 ┌─────────────┐     ┌──────────────┐     ┌──────────────────────────────┐
 │   iPhone     │────▶│  Linq Blue   │────▶│  Flask Server (app.py)       │
 │   iMessage   │◀────│  API         │◀────│                              │
-└─────────────┘     └──────────────┘     │  brain.py    → Claude API    │
+└─────────────┘     └──────────────┘     │  brain.py    → LLM API       │
                                           │  contacts.py → Contact Store │
                                           │  linq_client → Linq API      │
                                           │  voice.py    → Whisper API   │
@@ -114,13 +114,13 @@ curl -X POST http://localhost:3000/webhook \
 
 ```
 ├── app.py              # Flask server, webhook, command routing
-├── brain.py            # Claude API — parse, draft, summarize
+├── brain.py            # AI/LLM — parse, draft, summarize
 ├── contacts.py         # Thread-safe contact store
 ├── linq_client.py      # Linq API client
 ├── voice.py            # Whisper transcription
 ├── config.py           # Environment variables, constants
 ├── requirements.txt    # Python dependencies
-├── CLAUDE.md           # Development instructions
+├── DEVELOPMENT.md      # Development instructions
 ├── .env.example        # API key template
 └── .gitignore
 ```
