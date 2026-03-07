@@ -4,7 +4,14 @@ import os
 from openai import OpenAI
 from config import OPENAI_API_KEY
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+_openai_client = None
+
+
+def _get_openai_client() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client
 
 
 def transcribe_voice_memo(audio_url: str) -> str:
@@ -18,7 +25,7 @@ def transcribe_voice_memo(audio_url: str) -> str:
 
     try:
         with open(temp_path, "rb") as audio_file:
-            transcript = openai_client.audio.transcriptions.create(
+            transcript = _get_openai_client().audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_file
             )

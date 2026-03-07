@@ -1,14 +1,16 @@
-import os
-import threading
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from flask import Flask, request, jsonify
 
-from config import LINQ_PHONE_NUMBER, PORT
+from config import LINQ_PHONE_NUMBER, PORT, TEMP_HOT, TEMP_WARM
 from contacts import (
-    contacts as contacts_store,
     create_contact,
+    get_contact_by_id,
     get_user_contacts,
     find_contact_by_name,
+    update_contact,
+    first_name,
 )
 from brain import parse_brain_dump, draft_follow_up, generate_summary
 from linq_client import (
@@ -21,10 +23,22 @@ from linq_client import (
 )
 from voice import transcribe_voice_memo
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
+executor = ThreadPoolExecutor(max_workers=10)
 
 # Track which contact was last shown a draft for (simple state for "send" command)
 last_draft_shown = {}  # sender_phone -> contact_id
+
+
+def _format_draft_preview(contact: dict, footer: str) -> str:
+    """Build the draft preview message shown to the user."""
+    msg = f"📝 Draft for {contact['name']} ({contact['company']}):\n\n"
+    msg += f"\"{contact['draft']}\"\n\n"
+    msg += footer
+    return msg
 
 
 def process_message(chat_id: str, sender: str, text: str, message_id: str, attachments: list = None):
@@ -35,7 +49,6 @@ def process_message(chat_id: str, sender: str, text: str, message_id: str, attac
     text_lower = text.strip().lower() if text else ""
 
     try:
-        # === COMMANDS ===
         if text_lower in ("summary", "recap", "/summary"):
             handle_summary(chat_id, sender)
 
@@ -58,7 +71,6 @@ def process_message(chat_id: str, sender: str, text: str, message_id: str, attac
         elif text_lower in ("contacts", "list", "who"):
             handle_list(chat_id, sender)
 
-        # === VOICE MEMO ===
         elif attachments and any(a.get("type", "").startswith("audio") for a in attachments):
             audio_attachment = next(a for a in attachments if a.get("type", "").startswith("audio"))
             audio_url = audio_attachment.get("url")
@@ -70,10 +82,11 @@ def process_message(chat_id: str, sender: str, text: str, message_id: str, attac
             else:
                 send_message(chat_id, "Couldn't process that voice memo - no audio URL found.")
 
-        # === DEFAULT: BRAIN DUMP ===
         else:
             handle_brain_dump(chat_id, sender, text, message_id)
 
+    except Exception:
+        logger.exception("Error processing message from %s", sender)
     finally:
         stop_typing(chat_id)
 
@@ -84,12 +97,6 @@ def handle_brain_dump(chat_id: str, sender: str, text: str, message_id: str):
         parsed = parse_brain_dump(text)
         contact = create_contact(sender, parsed)
 
-        # Auto-generate draft if follow-up is needed
-        if contact["temperature"] in ("hot", "warm") and contact["follow_up_action"]:
-            draft = draft_follow_up(contact)
-            contact["draft"] = draft
-
-        # Build confirmation response
         lines = [f"✅ Logged: {contact['name']}"]
         if contact["company"]:
             lines[0] += f" — {contact['company']}"
@@ -99,14 +106,14 @@ def handle_brain_dump(chat_id: str, sender: str, text: str, message_id: str):
             lines.append(f"📋 Follow-up: {contact['follow_up_date']} — {contact['follow_up_action']}")
         if contact["personal_details"]:
             lines.append(f"💬 Noted: {', '.join(contact['personal_details'])}")
-        if contact["draft"]:
-            first_name = contact["name"].split()[0]
-            lines.append(f"✍️ Draft ready — say 'draft for {first_name}' to review")
+        if contact["temperature"] in (TEMP_HOT, TEMP_WARM) and contact["follow_up_action"]:
+            lines.append(f"✍️ Say 'draft for {first_name(contact)}' when you're ready to review")
 
         send_message(chat_id, "\n".join(lines))
         send_reaction(message_id, "like")
 
     except Exception as e:
+        logger.exception("Brain dump parse failed")
         send_message(chat_id, f"Couldn't parse that — try again? Error: {str(e)[:100]}")
 
 
@@ -128,11 +135,18 @@ def handle_update(chat_id: str, sender: str):
         send_message(chat_id, "No contacts yet. Get out there today! 💪")
         return
 
-    lines = ["☀️ Here's your update:\n"]
+    sent_contacts = []
+    unsent_hot = []
+    draft_ready = []
+    for c in user_list:
+        if c["sent"]:
+            sent_contacts.append(c)
+        elif c["temperature"] == TEMP_HOT:
+            unsent_hot.append(c)
+        if c["draft"] and not c["sent"]:
+            draft_ready.append(c)
 
-    sent_contacts = [c for c in user_list if c["sent"]]
-    unsent_hot = [c for c in user_list if not c["sent"] and c["temperature"] == "hot"]
-    draft_ready = [c for c in user_list if c["draft"] and not c["sent"]]
+    lines = ["☀️ Here's your update:\n"]
 
     if sent_contacts:
         lines.append("📬 SENT:")
@@ -152,9 +166,7 @@ def handle_update(chat_id: str, sender: str):
     if draft_ready:
         lines.append(f"\n✍️ {len(draft_ready)} draft(s) ready to review and send")
 
-    total = len(user_list)
-    sent = len(sent_contacts)
-    lines.append(f"\n🔢 Totals: {total} contacts, {sent} followed up")
+    lines.append(f"\n🔢 Totals: {len(user_list)} contacts, {len(sent_contacts)} followed up")
 
     send_message(chat_id, "\n".join(lines))
 
@@ -168,21 +180,17 @@ def handle_draft_request(chat_id: str, sender: str, name_query: str):
         return
 
     if not contact["draft"]:
-        contact["draft"] = draft_follow_up(contact)
+        draft = draft_follow_up(contact)
+        update_contact(contact["id"], draft=draft)
 
     last_draft_shown[sender] = contact["id"]
 
-    msg = f"📝 Draft for {contact['name']} ({contact['company']}):\n\n"
-    msg += f"\"{contact['draft']}\"\n\n"
-
     if contact.get("phone"):
-        msg += "Reply SEND to send now\n"
-        msg += "Reply LATER to hold\n"
-        msg += "Or tell me what to change"
+        footer = "Reply SEND to send now\nReply LATER to hold\nOr tell me what to change"
     else:
-        msg += "⚠️ No phone number on file — tell me their number and I'll send it"
+        footer = "⚠️ No phone number on file — tell me their number and I'll send it"
 
-    send_message(chat_id, msg)
+    send_message(chat_id, _format_draft_preview(contact, footer))
 
 
 def handle_send(chat_id: str, sender: str, text: str):
@@ -193,16 +201,14 @@ def handle_send(chat_id: str, sender: str, text: str):
         name = text[8:].strip()
         contact = find_contact_by_name(sender, name)
     elif sender in last_draft_shown:
-        contact_id = last_draft_shown[sender]
-        contact = contacts_store.get(contact_id)
+        contact = get_contact_by_id(last_draft_shown[sender])
 
     if not contact:
         send_message(chat_id, "Send what? Review a draft first — say 'draft for [name]'")
         return
 
     if not contact.get("draft"):
-        first_name = contact["name"].split()[0]
-        send_message(chat_id, f"No draft ready for {contact['name']}. Say 'draft for {first_name}' first.")
+        send_message(chat_id, f"No draft ready for {contact['name']}. Say 'draft for {first_name(contact)}' first.")
         return
 
     if not contact.get("phone"):
@@ -212,8 +218,7 @@ def handle_send(chat_id: str, sender: str, text: str):
     result = send_message_to_phone(contact["phone"], contact["draft"])
 
     if "error" not in result:
-        contact["sent"] = True
-        contact["sent_at"] = datetime.now().isoformat()
+        update_contact(contact["id"], sent=True, sent_at=datetime.now().isoformat())
         send_message(chat_id, f"✅ Sent to {contact['name']} ({contact['phone']})\n📱 Delivered via iMessage")
     else:
         send_message(chat_id, f"❌ Couldn't send: {result['error']}\nCheck the phone number and try again.")
@@ -225,19 +230,16 @@ def handle_edit(chat_id: str, sender: str, text: str):
         send_message(chat_id, "Nothing to edit. Review a draft first — say 'draft for [name]'")
         return
 
-    contact_id = last_draft_shown[sender]
-    contact = contacts_store.get(contact_id)
+    contact = get_contact_by_id(last_draft_shown[sender])
     if not contact:
         send_message(chat_id, "Contact not found. Try 'draft for [name]' again.")
         return
 
-    edit_instruction = text[5:].strip()  # Remove "edit " prefix
-    contact["draft"] = draft_follow_up({**contact, "notes": contact["notes"] + f" | Edit request: {edit_instruction}"})
+    edit_instruction = text[5:].strip()
+    draft = draft_follow_up({**contact, "notes": contact["notes"] + f" | Edit request: {edit_instruction}"})
+    update_contact(contact["id"], draft=draft)
 
-    msg = f"📝 Updated draft for {contact['name']}:\n\n"
-    msg += f"\"{contact['draft']}\"\n\n"
-    msg += "Reply SEND to send now, or edit again"
-    send_message(chat_id, msg)
+    send_message(chat_id, _format_draft_preview(contact, "Reply SEND to send now, or edit again"))
 
 
 def handle_help(chat_id: str):
@@ -286,6 +288,9 @@ def handle_list(chat_id: str, sender: str):
 def webhook():
     """Handle incoming Linq webhook events."""
     event = request.json
+    if not event or not isinstance(event, dict):
+        return jsonify({"status": "bad request"}), 400
+
     event_type = event.get("type", "")
 
     if event_type == "message.received":
@@ -296,16 +301,13 @@ def webhook():
         message_id = data.get("messageId", "")
         attachments = data.get("attachments", [])
 
-        # Ignore messages from our own bot number
+        if not chat_id or not sender:
+            return jsonify({"status": "missing fields"}), 400
+
         if sender == LINQ_PHONE_NUMBER:
             return jsonify({"status": "ignored"}), 200
 
-        # Process in background thread so webhook returns fast
-        thread = threading.Thread(
-            target=process_message,
-            args=(chat_id, sender, text, message_id, attachments)
-        )
-        thread.start()
+        executor.submit(process_message, chat_id, sender, text, message_id, attachments)
 
     return jsonify({"status": "ok"}), 200
 

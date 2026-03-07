@@ -1,6 +1,9 @@
 import json
+import logging
 import anthropic
-from config import ANTHROPIC_API_KEY
+from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+
+logger = logging.getLogger(__name__)
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -59,6 +62,10 @@ At the bottom: draft status and totals.
 
 Keep it tight. This gets read on a phone screen."""
 
+SUMMARY_FIELDS = ("name", "company", "title", "notes", "temperature",
+                   "follow_up_date", "follow_up_action", "personal_details",
+                   "draft", "sent")
+
 
 def _clean_json_response(text: str) -> str:
     """Strip markdown code fences from Claude's response."""
@@ -72,30 +79,31 @@ def _clean_json_response(text: str) -> str:
     return text.strip()
 
 
+def _call_claude(system: str, user_content: str, max_tokens: int = 500) -> str:
+    """Make a Claude API call and return the text response."""
+    response = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user_content}]
+    )
+    return response.content[0].text.strip()
+
+
 def parse_brain_dump(raw_text: str) -> dict:
     """Parse unstructured brain dump into structured contact."""
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=500,
-        system=PARSE_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": raw_text}]
-    )
-
-    text = _clean_json_response(response.content[0].text)
+    text = _clean_json_response(_call_claude(PARSE_SYSTEM_PROMPT, raw_text))
 
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        retry = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=500,
-            system=PARSE_SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": f"Parse this into the JSON format. Return ONLY valid JSON, no backticks:\n\n{raw_text}"
-            }]
+        logger.warning("First parse attempt failed, retrying")
+        retry_text = _clean_json_response(
+            _call_claude(
+                PARSE_SYSTEM_PROMPT,
+                f"Parse this into the JSON format. Return ONLY valid JSON, no backticks:\n\n{raw_text}"
+            )
         )
-        retry_text = _clean_json_response(retry.content[0].text)
         return json.loads(retry_text)
 
 
@@ -103,38 +111,30 @@ def draft_follow_up(contact: dict) -> str:
     """Generate a personalized follow-up message."""
     personal = ", ".join(contact.get("personal_details", [])) or "none captured"
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=300,
-        system=DRAFT_SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Write a follow-up iMessage for this contact:\n\n"
-                f"Name: {contact['name']}\n"
-                f"Company: {contact['company']}\n"
-                f"Title: {contact['title']}\n"
-                f"What we discussed: {contact['notes']}\n"
-                f"What I promised: {contact['follow_up_action']}\n"
-                f"Personal details: {personal}\n"
-                f"Temperature: {contact['temperature']}"
-            )
-        }]
+    return _call_claude(
+        DRAFT_SYSTEM_PROMPT,
+        (
+            f"Write a follow-up iMessage for this contact:\n\n"
+            f"Name: {contact['name']}\n"
+            f"Company: {contact['company']}\n"
+            f"Title: {contact['title']}\n"
+            f"What we discussed: {contact['notes']}\n"
+            f"What I promised: {contact['follow_up_action']}\n"
+            f"Personal details: {personal}\n"
+            f"Temperature: {contact['temperature']}"
+        ),
+        max_tokens=300
     )
-
-    return response.content[0].text.strip()
 
 
 def generate_summary(contacts_list: list) -> str:
     """Generate end-of-day summary."""
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=800,
-        system=SUMMARY_SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": f"Here are today's contacts:\n\n{json.dumps(contacts_list, indent=2)}"
-        }]
+    trimmed = [
+        {k: c.get(k, "") for k in SUMMARY_FIELDS}
+        for c in contacts_list
+    ]
+    return _call_claude(
+        SUMMARY_SYSTEM_PROMPT,
+        f"Here are today's contacts:\n\n{json.dumps(trimmed)}",
+        max_tokens=800
     )
-
-    return response.content[0].text.strip()

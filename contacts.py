@@ -1,12 +1,15 @@
+import threading
 from datetime import datetime
 from typing import Optional
 import uuid
+
+_lock = threading.Lock()
 
 # Main contact store - keyed by unique ID
 contacts = {}
 
 # Map user phone numbers to their contact lists
-user_contacts = {}  # phone -> [contact_id, contact_id, ...]
+user_contacts = {}  # phone -> [contact_id, ...]
 
 
 def create_contact(user_phone: str, parsed_data: dict) -> dict:
@@ -33,19 +36,36 @@ def create_contact(user_phone: str, parsed_data: dict) -> dict:
         "reply_received": None,
     }
 
-    contacts[contact_id] = contact
-
-    if user_phone not in user_contacts:
-        user_contacts[user_phone] = []
-    user_contacts[user_phone].append(contact_id)
+    with _lock:
+        contacts[contact_id] = contact
+        if user_phone not in user_contacts:
+            user_contacts[user_phone] = []
+        user_contacts[user_phone].append(contact_id)
 
     return contact
 
 
 def get_user_contacts(user_phone: str) -> list:
     """Get all contacts for a user."""
-    ids = user_contacts.get(user_phone, [])
-    return [contacts[cid] for cid in ids if cid in contacts]
+    with _lock:
+        ids = user_contacts.get(user_phone, [])
+        return [c for cid in ids if (c := contacts.get(cid)) is not None]
+
+
+def get_contact_by_id(contact_id: str) -> Optional[dict]:
+    """Get a contact by its ID."""
+    with _lock:
+        return contacts.get(contact_id)
+
+
+def update_contact(contact_id: str, **updates) -> Optional[dict]:
+    """Update fields on a contact. Returns updated contact or None."""
+    with _lock:
+        contact = contacts.get(contact_id)
+        if not contact:
+            return None
+        contact.update(updates)
+        return contact
 
 
 def find_contact_by_name(user_phone: str, name_query: str) -> Optional[dict]:
@@ -56,3 +76,9 @@ def find_contact_by_name(user_phone: str, name_query: str) -> Optional[dict]:
         if name_lower in c["name"].lower():
             return c
     return None
+
+
+def first_name(contact: dict) -> str:
+    """Extract first name from contact, with fallback."""
+    parts = contact.get("name", "").split()
+    return parts[0] if parts else "them"
