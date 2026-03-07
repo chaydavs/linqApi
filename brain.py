@@ -1,11 +1,11 @@
 import json
 import logging
 import anthropic
-from config import AI_API_KEY, AI_MODEL
+from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 
 logger = logging.getLogger(__name__)
 
-client = anthropic.Anthropic(api_key=AI_API_KEY)
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 PARSE_SYSTEM_PROMPT = """You are a contact parsing assistant. Users will send you raw,
 unstructured text (or transcribed voice memos) about people they just met at a conference.
@@ -68,7 +68,7 @@ SUMMARY_FIELDS = ("name", "company", "title", "notes", "temperature",
 
 
 def _clean_json_response(text: str) -> str:
-    """Strip markdown code fences from LLM response."""
+    """Strip markdown code fences from Claude's response."""
     text = text.strip()
     if text.startswith("```json"):
         text = text[7:]
@@ -79,10 +79,10 @@ def _clean_json_response(text: str) -> str:
     return text.strip()
 
 
-def _call_llm(system: str, user_content: str, max_tokens: int = 500) -> str:
-    """Make an LLM API call and return the text response."""
+def _call_claude(system: str, user_content: str, max_tokens: int = 500) -> str:
+    """Make a Claude API call and return the text response."""
     response = client.messages.create(
-        model=AI_MODEL,
+        model=CLAUDE_MODEL,
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user_content}]
@@ -92,14 +92,14 @@ def _call_llm(system: str, user_content: str, max_tokens: int = 500) -> str:
 
 def parse_brain_dump(raw_text: str) -> dict:
     """Parse unstructured brain dump into structured contact."""
-    text = _clean_json_response(_call_llm(PARSE_SYSTEM_PROMPT, raw_text))
+    text = _clean_json_response(_call_claude(PARSE_SYSTEM_PROMPT, raw_text))
 
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         logger.warning("First parse attempt failed, retrying")
         retry_text = _clean_json_response(
-            _call_llm(
+            _call_claude(
                 PARSE_SYSTEM_PROMPT,
                 f"Parse this into the JSON format. Return ONLY valid JSON, no backticks:\n\n{raw_text}"
             )
@@ -111,7 +111,7 @@ def draft_follow_up(contact: dict) -> str:
     """Generate a personalized follow-up message."""
     personal = ", ".join(contact.get("personal_details", [])) or "none captured"
 
-    return _call_llm(
+    return _call_claude(
         DRAFT_SYSTEM_PROMPT,
         (
             f"Write a follow-up iMessage for this contact:\n\n"
@@ -133,7 +133,7 @@ def generate_summary(contacts_list: list) -> str:
         {k: c.get(k, "") for k in SUMMARY_FIELDS}
         for c in contacts_list
     ]
-    return _call_llm(
+    return _call_claude(
         SUMMARY_SYSTEM_PROMPT,
         f"Here are today's contacts:\n\n{json.dumps(trimmed)}",
         max_tokens=800

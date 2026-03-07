@@ -13,7 +13,7 @@ user_contacts = {}  # phone -> [contact_id, ...]
 
 
 def create_contact(user_phone: str, parsed_data: dict) -> dict:
-    """Create a new contact from parsed output."""
+    """Create a new contact from Claude's parsed output."""
     contact_id = str(uuid.uuid4())[:8]
 
     contact = {
