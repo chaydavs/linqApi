@@ -194,7 +194,7 @@ def handle_draft_request(chat_id: str, sender: str, name_query: str):
 
     if not contact["draft"]:
         draft = draft_follow_up(contact)
-        update_contact(contact["id"], draft=draft)
+        contact = update_contact(contact["id"], draft=draft) or contact
 
     with _draft_lock:
         last_draft_shown[sender] = contact["id"]

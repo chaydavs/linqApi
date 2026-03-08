@@ -3,14 +3,14 @@
 Covers:
 - cleanup_images: removes temp files, silently ignores missing files
 - html_to_image: raises RuntimeError when Playwright not installed
-- render_deck_images: calls html_to_image once per HTML page
+- render_deck_images: renders each HTML page with a single shared browser
 """
 
 import sys
 import os
 import tempfile
 import pytest
-from unittest.mock import patch, call
+from unittest.mock import patch, call, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -124,42 +124,63 @@ class TestHtmlToImageNoPlaywright:
 
 
 # ---------------------------------------------------------------------------
-# render_deck_images
+# render_deck_images — single browser, multiple pages
 # ---------------------------------------------------------------------------
 
 class TestRenderDeckImages:
-    """render_deck_images should call html_to_image once per HTML page."""
-
-    def test_calls_html_to_image_for_each_page(self):
-        html_pages = ["<html>1</html>", "<html>2</html>", "<html>3</html>"]
-        fake_paths = ["/tmp/tile_0.png", "/tmp/tile_1.png", "/tmp/tile_2.png"]
-
-        with patch("tiles.image_converter.html_to_image", side_effect=fake_paths) as mock_convert:
-            result = render_deck_images(html_pages)
-
-        assert mock_convert.call_count == 3
-        mock_convert.assert_has_calls([call(p) for p in html_pages])
-
-    def test_returns_list_of_paths(self):
-        fake_paths = ["/tmp/tile_0.png", "/tmp/tile_1.png"]
-        with patch("tiles.image_converter.html_to_image", side_effect=fake_paths):
-            result = render_deck_images(["<html>1</html>", "<html>2</html>"])
-        assert result == fake_paths
+    """render_deck_images reuses a single browser for all tiles."""
 
     def test_empty_input_returns_empty_list(self):
-        with patch("tiles.image_converter.html_to_image") as mock_convert:
-            result = render_deck_images([])
+        result = render_deck_images([])
         assert result == []
-        mock_convert.assert_not_called()
+
+    def _mock_playwright(self):
+        """Create a mock Playwright context manager chain."""
+        mock_page = MagicMock()
+        mock_browser = MagicMock()
+        mock_browser.new_page.return_value = mock_page
+        mock_pw = MagicMock()
+        mock_pw.chromium.launch.return_value = mock_browser
+        mock_sync_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__ = MagicMock(return_value=mock_pw)
+        mock_sync_pw.return_value.__exit__ = MagicMock(return_value=False)
+
+        mock_module = MagicMock()
+        mock_module.sync_playwright = mock_sync_pw
+        return mock_module, mock_pw, mock_browser, mock_page
+
+    def test_renders_correct_number_of_images(self):
+        """Each HTML page produces one PNG path."""
+        html_pages = ["<html>1</html>", "<html>2</html>", "<html>3</html>"]
+        mock_module, mock_pw, mock_browser, mock_page = self._mock_playwright()
+
+        with patch.dict("sys.modules", {"playwright": MagicMock(), "playwright.sync_api": mock_module}):
+            result = render_deck_images(html_pages)
+
+        assert len(result) == 3
+        assert all(p.endswith(".png") for p in result)
+        mock_pw.chromium.launch.assert_called_once()
+        assert mock_browser.new_page.call_count == 3
+        mock_browser.close.assert_called_once()
+        cleanup_images(result)
 
     def test_single_page(self):
-        with patch("tiles.image_converter.html_to_image", return_value="/tmp/tile.png"):
-            result = render_deck_images(["<html>test</html>"])
-        assert result == ["/tmp/tile.png"]
+        mock_module, mock_pw, mock_browser, mock_page = self._mock_playwright()
 
-    def test_preserves_order(self):
-        ordered_paths = [f"/tmp/tile_{i}.png" for i in range(5)]
-        html_pages = [f"<html>{i}</html>" for i in range(5)]
-        with patch("tiles.image_converter.html_to_image", side_effect=ordered_paths):
-            result = render_deck_images(html_pages)
-        assert result == ordered_paths
+        with patch.dict("sys.modules", {"playwright": MagicMock(), "playwright.sync_api": mock_module}):
+            result = render_deck_images(["<html>test</html>"])
+
+        assert len(result) == 1
+        cleanup_images(result)
+
+    def test_html_tempfiles_cleaned_up(self):
+        """HTML temp files are removed even though PNG paths remain."""
+        mock_module, mock_pw, mock_browser, mock_page = self._mock_playwright()
+
+        with patch.dict("sys.modules", {"playwright": MagicMock(), "playwright.sync_api": mock_module}):
+            result = render_deck_images(["<html>1</html>", "<html>2</html>"])
+
+        for png_path in result:
+            html_path = png_path.replace(".png", ".html")
+            assert not os.path.exists(html_path)
+        cleanup_images(result)

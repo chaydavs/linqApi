@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '🔍 File modified — code-reviewer will run at Stop.'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /Users/chaitanyadavuluri/Downloads/Linq-API-WeChat && python3 -c \"import app\" 2>&1 && echo '✅ Import check passed' || echo '❌ Import error — something is broken'"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '📋 LinqUp session started. Agents: code-reviewer, pr-reviewer, build-status, tester, edge-hunter, prompt-engineer. Commands: /pipeline /review /edges /test /prompt /status'"
+          }
+        ]
+      }
+    ]
+  }
+}

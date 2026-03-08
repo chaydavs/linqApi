@@ -92,7 +92,8 @@ def _call_claude(system: str, user_content: str, max_tokens: int = 500) -> str:
         model=CLAUDE_MODEL,
         max_tokens=max_tokens,
         system=system,
-        messages=[{"role": "user", "content": user_content}]
+        messages=[{"role": "user", "content": user_content}],
+        timeout=30.0,
     )
     return response.content[0].text.strip()
 

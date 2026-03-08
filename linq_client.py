@@ -15,7 +15,7 @@ def _linq_request(method: str, path: str, json_body: dict = None) -> None:
     """Fire-and-forget request to Linq API. Logs failures instead of raising."""
     url = f"{LINQ_BASE_URL}{path}"
     try:
-        session.request(method, url, json=json_body)
+        session.request(method, url, json=json_body, timeout=10)
     except requests.RequestException as e:
         logger.warning("Linq API %s %s failed: %s", method, path, e)
 
@@ -27,7 +27,7 @@ def send_message(chat_id: str, text: str, effect: str = None) -> dict:
     if effect:
         payload["effect"] = effect
     try:
-        resp = session.post(url, json=payload)
+        resp = session.post(url, json=payload, timeout=15)
         resp.raise_for_status()
         return resp.json()
     except (requests.RequestException, ValueError) as e:
@@ -41,24 +41,29 @@ def send_message_to_phone(phone_number: str, text: str) -> dict:
     NOTE: Check sandbox docs for exact endpoint. This may need adjustment
     based on the actual Linq Blue v3 API structure.
     """
-    # Attempt 1: Direct message to phone
-    url = f"{LINQ_BASE_URL}/messages"
-    payload = {"to": phone_number, "text": text}
-    resp = session.post(url, json=payload)
+    try:
+        # Attempt 1: Direct message to phone
+        url = f"{LINQ_BASE_URL}/messages"
+        payload = {"to": phone_number, "text": text}
+        resp = session.post(url, json=payload, timeout=15)
 
-    if resp.status_code in (200, 201):
-        return resp.json()
+        if resp.status_code in (200, 201):
+            return resp.json()
 
-    # Attempt 2: Create chat first, then send message
-    chat_url = f"{LINQ_BASE_URL}/chats"
-    chat_resp = session.post(chat_url, json={"participants": [phone_number]})
-    if chat_resp.status_code in (200, 201):
-        chat_data = chat_resp.json()
-        chat_id = chat_data.get("id") or chat_data.get("chatId")
-        if chat_id:
-            return send_message(chat_id, text)
+        # Attempt 2: Create chat first, then send message
+        chat_url = f"{LINQ_BASE_URL}/chats"
+        chat_resp = session.post(chat_url, json={"participants": [phone_number]}, timeout=15)
+        if chat_resp.status_code in (200, 201):
+            chat_data = chat_resp.json()
+            chat_id = chat_data.get("id") or chat_data.get("chatId")
+            if chat_id:
+                return send_message(chat_id, text)
 
-    return {"error": "Could not send - check API docs for correct endpoint"}
+        return {"error": "Could not send - check API docs for correct endpoint"}
+
+    except requests.RequestException as e:
+        logger.error("send_message_to_phone failed for %s: %s", phone_number, e)
+        return {"error": str(e)}
 
 
 def start_typing(chat_id: str):

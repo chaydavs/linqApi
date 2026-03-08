@@ -32,9 +32,9 @@ def html_to_image(html: str) -> str:
             page = browser.new_page(
                 viewport={"width": TILE_WIDTH, "height": TILE_HEIGHT}
             )
-            page.goto(f"file://{html_path}")
-            page.wait_for_load_state("networkidle")
-            page.screenshot(path=img_path, full_page=False)
+            page.goto(f"file://{html_path}", timeout=10000)
+            page.wait_for_load_state("domcontentloaded", timeout=5000)
+            page.screenshot(path=img_path, full_page=False, timeout=10000)
             browser.close()
 
         return img_path
@@ -43,7 +43,6 @@ def html_to_image(html: str) -> str:
         logger.error("Playwright not installed. Run: pip install playwright && playwright install chromium")
         raise RuntimeError("Playwright not installed")
     finally:
-        # Clean up the HTML temp file
         try:
             os.unlink(html_path)
         except OSError:
@@ -51,11 +50,46 @@ def html_to_image(html: str) -> str:
 
 
 def render_deck_images(html_pages: list[str]) -> list[str]:
-    """Render a list of HTML strings into PNG image paths."""
+    """Render a list of HTML strings into PNG image paths.
+
+    Reuses a single browser instance across all tiles for efficiency.
+    """
+    if not html_pages:
+        return []
+
+    from playwright.sync_api import sync_playwright
+
     paths = []
-    for html in html_pages:
-        path = html_to_image(html)
-        paths.append(path)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            for html in html_pages:
+                # Write HTML to temp file
+                with tempfile.NamedTemporaryFile(
+                    suffix=".html", delete=False, mode="w", encoding="utf-8"
+                ) as f:
+                    f.write(html)
+                    html_path = f.name
+
+                img_path = html_path.replace(".html", ".png")
+
+                try:
+                    page = browser.new_page(
+                        viewport={"width": TILE_WIDTH, "height": TILE_HEIGHT}
+                    )
+                    page.goto(f"file://{html_path}", timeout=10000)
+                    page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    page.screenshot(path=img_path, full_page=False, timeout=10000)
+                    page.close()
+                    paths.append(img_path)
+                finally:
+                    try:
+                        os.unlink(html_path)
+                    except OSError:
+                        pass
+        finally:
+            browser.close()
+
     return paths
 
 

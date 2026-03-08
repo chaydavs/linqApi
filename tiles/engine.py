@@ -103,6 +103,7 @@ def generate_and_send_deck(contact: dict, hint: Optional[str] = None) -> dict:
     if not phone:
         return {"success": False, "error": "No phone number for contact"}
 
+    image_paths = []
     try:
         # Step 1: Assemble context
         context = assemble_tile_context(contact)
@@ -136,9 +137,6 @@ def generate_and_send_deck(contact: dict, hint: Optional[str] = None) -> dict:
         outro = contact.get("draft") or "Let me know what you think!"
         send_message_to_phone(phone, outro)
 
-        # Cleanup temp files
-        cleanup_images(image_paths)
-
         return {
             "success": True,
             "deck_type": deck_type,
@@ -148,6 +146,9 @@ def generate_and_send_deck(contact: dict, hint: Optional[str] = None) -> dict:
     except Exception as e:
         logger.exception("Tile deck generation failed for %s", contact.get("name"))
         return {"success": False, "error": str(e)[:200]}
+
+    finally:
+        cleanup_images(image_paths)
 
 
 def _send_image_to_phone(phone: str, image_path: str):
