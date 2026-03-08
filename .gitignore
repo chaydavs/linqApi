@@ -7,3 +7,5 @@ venv/
 dist/
 build/
 firebase-debug.log
+.claude/
+CLAUDE.md
