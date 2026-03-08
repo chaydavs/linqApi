@@ -38,7 +38,8 @@ def _base_css(accent: str) -> str:
         padding: 80px 56px;
         display: flex;
         flex-direction: column;
-        justify-content: center;
+        justify-content: flex-start;
+        padding-top: 120px;
     }}
 
     .tag {{
@@ -162,9 +163,9 @@ def _tile_inner_html(tile: dict) -> str:
     elif t == "math":
         return f"""
         <span class="tag">{h(tile.get('tag', 'YOUR NUMBERS'))}</span>
-        <p class="stat" style="font-size:120px;">{h(tile.get('stat', ''))}</p>
-        <p class="body">{h(tile.get('stat_label', ''))}</p>
-        <p class="source">{h(tile.get('source', ''))}</p>"""
+        <p class="stat" style="font-size:96px;margin-top:24px;">{h(tile.get('stat', ''))}</p>
+        <p class="body" style="margin-top:24px;">{h(tile.get('stat_label', ''))}</p>
+        <p class="source" style="margin-top:32px;">{h(tile.get('source', ''))}</p>"""
 
     elif t == "timeline":
         items_html = ""
