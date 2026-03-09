@@ -1,21 +1,36 @@
+import json
 import logging
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from flask import Flask, request, jsonify
 
 from config import LINQ_PHONE_NUMBER, PORT, TEMP_HOT, TEMP_WARM
+import re
+from datetime import date
+
 from contacts import (
     create_contact,
+    find_and_merge_contact,
     get_contact_by_id,
+    get_rep_profile,
     get_user_contacts,
     find_contact_by_name,
+    set_rep_profile,
     update_contact,
     first_name,
 )
-from brain import parse_brain_dump, draft_follow_up, generate_summary
+from brain import (
+    parse_brain_dump,
+    draft_follow_up,
+    generate_summary,
+    classify_intent,
+    parse_rep_profile,
+    resolve_follow_up_date,
+)
 from linq_client import (
-    send_message,
+    send_reply,
     send_message_to_phone,
     start_typing,
     stop_typing,
@@ -43,60 +58,183 @@ def _format_draft_preview(contact: dict, footer: str) -> str:
     return msg
 
 
+def _fast_path_route(text_lower: str) -> str:
+    """Try to match exact commands without a Claude call. Returns intent or empty string."""
+    if text_lower in ("summary", "recap", "/summary"):
+        return "summary"
+    if text_lower in ("/update", "update", "morning"):
+        return "update"
+    if text_lower in ("help", "/help"):
+        return "help"
+    if text_lower in ("contacts", "list", "who"):
+        return "contacts"
+    if text_lower == "send" or text_lower.startswith("send to "):
+        return "send"
+    if text_lower.startswith("draft for ") or text_lower.startswith("draft "):
+        return "draft_keyword"
+    if text_lower.startswith("follow up with "):
+        return "visual"
+    if text_lower.startswith("edit "):
+        return "edit"
+    if text_lower.startswith("/setup"):
+        return "setup"
+    if _is_visual_send(text_lower):
+        return "visual_send"
+    return ""
+
+
+# Track which users are in onboarding flow
+_onboarding_pending = set()  # sender phones awaiting profile response
+
+
 def process_message(chat_id: str, sender: str, text: str, message_id: str, attachments: list = None):
-    """Route incoming message to the right handler."""
+    """Route incoming message to the right handler using intent classification."""
+    print(f"[PROCESS] chat_id={chat_id} sender={sender} text={text!r} msg_id={message_id}", flush=True)
     start_typing(chat_id)
     mark_read(chat_id)
 
     text_lower = text.strip().lower() if text else ""
 
     try:
-        if text_lower in ("summary", "recap", "/summary"):
-            handle_summary(chat_id, sender)
+        # Check if user is in onboarding flow (awaiting profile response)
+        if sender in _onboarding_pending and text and text.strip():
+            _onboarding_pending.discard(sender)
+            handle_setup(chat_id, sender, text)
+            return
 
-        elif text_lower in ("/update", "update", "morning"):
-            handle_update(chat_id, sender)
+        # First-time user onboarding
+        profile = get_rep_profile(sender)
+        if not profile and text_lower not in ("help", "/help"):
+            _onboarding_pending.add(sender)
+            send_reply(
+                chat_id,
+                "Hey! I'm LinqUp — your follow-up sidekick. 👋\n\n"
+                "Quick intro — what's your name, company, and what do you sell?\n\n"
+                "Example: \"Chay Davuluri, LinqUp, sales API platform\""
+            )
+            return
 
-        elif text_lower.startswith("draft for ") or text_lower.startswith("draft "):
-            name = text.split("for ", 1)[-1] if "for " in text else text.split("draft ", 1)[-1]
-            handle_draft_request(chat_id, sender, name.strip())
-
-        elif _is_visual_send(text_lower):
-            name, hint = _parse_visual_command(text)
-            handle_visual_follow_up(chat_id, sender, name, hint)
-
-        elif text_lower.startswith("follow up with "):
-            name, hint = _parse_follow_up_command(text)
-            handle_visual_follow_up(chat_id, sender, name, hint)
-
-        elif text_lower == "send" or text_lower.startswith("send to "):
-            handle_send(chat_id, sender, text)
-
-        elif text_lower.startswith("edit "):
-            handle_edit(chat_id, sender, text)
-
-        elif text_lower in ("help", "/help"):
-            handle_help(chat_id)
-
-        elif text_lower in ("contacts", "list", "who"):
-            handle_list(chat_id, sender)
-
-        elif attachments and any(a.get("type", "").startswith("audio") for a in attachments):
+        # Handle voice memos first (attachment-based, no intent needed)
+        if attachments and any(a.get("type", "").startswith("audio") for a in attachments):
             audio_attachment = next(a for a in attachments if a.get("type", "").startswith("audio"))
             audio_url = audio_attachment.get("url")
             if audio_url:
                 transcribed = transcribe_voice_memo(audio_url)
                 preview = f"{transcribed[:100]}..." if len(transcribed) > 100 else transcribed
-                send_message(chat_id, f"🎤 Heard: \"{preview}\"")
+                send_reply(chat_id, f"🎤 Heard: \"{preview}\"")
                 handle_brain_dump(chat_id, sender, transcribed, message_id)
             else:
-                send_message(chat_id, "Couldn't process that voice memo - no audio URL found.")
+                send_reply(chat_id, "Couldn't grab that voice memo — try again?")
+            return
 
-        elif text and text.strip():
-            handle_brain_dump(chat_id, sender, text, message_id)
+        # Handle bare phone numbers
+        if _is_phone_number(text_lower):
+            handle_phone_number(chat_id, sender, text.strip())
+            return
+
+        if not text or not text.strip():
+            rep_name = profile.get("name", "").split()[0] if profile else ""
+            greeting = f"Hey{' ' + rep_name if rep_name else ''}!"
+            send_reply(chat_id, f"{greeting} Text me about someone you met, or say 'update' to check your pipeline.")
+            return
+
+        # Fast path: exact keyword matches (no Claude call needed)
+        fast = _fast_path_route(text_lower)
+        if fast == "summary":
+            handle_summary(chat_id, sender)
+            return
+        if fast == "update":
+            handle_update(chat_id, sender)
+            return
+        if fast == "help":
+            handle_help(chat_id)
+            return
+        if fast == "contacts":
+            handle_list(chat_id, sender)
+            return
+        if fast == "send":
+            handle_send(chat_id, sender, text)
+            return
+        if fast == "draft_keyword":
+            name = text.split("for ", 1)[-1] if "for " in text else text.split("draft ", 1)[-1]
+            handle_draft_request(chat_id, sender, name.strip())
+            return
+        if fast == "visual":
+            name, hint = _parse_follow_up_command(text)
+            handle_visual_follow_up(chat_id, sender, name, hint)
+            return
+        if fast == "visual_send":
+            name, hint = _parse_visual_command(text)
+            handle_visual_follow_up(chat_id, sender, name, hint)
+            return
+        if fast == "edit":
+            handle_edit(chat_id, sender, text)
+            return
+        if fast == "setup":
+            setup_text = text[6:].strip() if len(text) > 6 else ""
+            if setup_text:
+                handle_setup(chat_id, sender, setup_text)
+            else:
+                send_reply(chat_id, "Tell me about yourself! Example: \"Chay Davuluri, LinqUp, sales API platform\"")
+                _onboarding_pending.add(sender)
+            return
+
+        # No fast match — use Claude to classify intent
+        user_contacts = get_user_contacts(sender)
+        contact_names = [c["name"] for c in user_contacts]
+        intent_result = classify_intent(text, contact_names)
+        intent = intent_result.get("intent", "brain_dump")
+        name = intent_result.get("name", "").strip()
+        reply_text = intent_result.get("reply", "")
+
+        print(f"[INTENT] {intent} name={name!r} reply={reply_text!r}", flush=True)
+
+        if intent == "greeting" or intent == "conversational":
+            send_reply(chat_id, reply_text or "Hey! Text me about someone you met and I'll help you follow up. 👋")
+
+        elif intent == "draft":
+            if name:
+                handle_draft_request(chat_id, sender, name)
+            else:
+                send_reply(chat_id, "Who do you want a draft for? Try 'draft for [name]'")
+
+        elif intent == "send":
+            handle_send(chat_id, sender, text)
+
+        elif intent == "summary":
+            handle_summary(chat_id, sender)
+
+        elif intent == "update":
+            handle_update(chat_id, sender)
+
+        elif intent == "help":
+            handle_help(chat_id)
+
+        elif intent == "contacts":
+            handle_list(chat_id, sender)
+
+        elif intent == "visual" or intent == "follow_up":
+            if name:
+                hint = intent_result.get("hint", "")
+                handle_visual_follow_up(chat_id, sender, name, hint)
+            else:
+                send_reply(chat_id, "Who should I follow up with? Try 'follow up with [name]'")
+
+        elif intent == "edit":
+            handle_edit(chat_id, sender, text)
+
+        elif intent == "question":
+            if reply_text:
+                send_reply(chat_id, reply_text)
+            else:
+                send_reply(chat_id, "I'm not sure — try 'contacts' to see your list or 'help' for commands.")
+
+        elif intent == "phone_number":
+            handle_phone_number(chat_id, sender, text.strip())
 
         else:
-            send_message(chat_id, "Send me a brain dump about someone you met, or say 'help' for commands.")
+            # Default: brain_dump — this message contains contact info
+            handle_brain_dump(chat_id, sender, text, message_id)
 
     except Exception:
         logger.exception("Error processing message from %s", sender)
@@ -104,65 +242,212 @@ def process_message(chat_id: str, sender: str, text: str, message_id: str, attac
         stop_typing(chat_id)
 
 
+_PHONE_RE = re.compile(r"^\+?\d[\d\s\-().]{6,15}$")
+
+
+def _is_phone_number(text: str) -> bool:
+    """Check if the message is just a phone number."""
+    return bool(_PHONE_RE.match(text.strip()))
+
+
+def handle_phone_number(chat_id: str, sender: str, phone: str):
+    """Attach a phone number to the last discussed contact."""
+    # Normalize: strip spaces, dashes, parens
+    clean_phone = re.sub(r"[\s\-().]+", "", phone)
+
+    with _draft_lock:
+        contact_id = last_draft_shown.get(sender)
+
+    if contact_id:
+        contact = get_contact_by_id(contact_id)
+        if contact:
+            updated = update_contact(contact_id, phone=clean_phone)
+            if updated:
+                send_reply(chat_id, f"📱 Got it — saved {clean_phone} for {updated['name']}")
+                return
+
+    # No recent draft context — check if any contact is missing a phone
+    user_list = get_user_contacts(sender)
+    no_phone = [c for c in reversed(user_list) if not c.get("phone")]
+    if no_phone:
+        contact = no_phone[0]
+        updated = update_contact(contact["id"], phone=clean_phone)
+        if updated:
+            send_reply(chat_id, f"📱 Got it — saved {clean_phone} for {updated['name']}")
+            return
+
+    send_reply(chat_id, f"Got the number {clean_phone}, but I'm not sure who it's for. Try: 'Sarah Chen, phone {clean_phone}'")
+
+
+def handle_setup(chat_id: str, sender: str, text: str):
+    """Parse and store rep profile."""
+    try:
+        parsed = parse_rep_profile(text)
+        profile = set_rep_profile(sender, parsed)
+        rep_name = profile.get("name", "").split()[0] or "there"
+        company = profile.get("company", "")
+        product = profile.get("product", "")
+
+        msg = f"Nice to meet you, {rep_name}!"
+        if company:
+            msg += f" {company}"
+            if product:
+                msg += f" — {product}"
+            msg += " sounds great."
+        msg += "\n\nI'm ready! Text me about anyone you meet and I'll handle the rest. 🚀"
+
+        send_reply(chat_id, msg)
+    except Exception:
+        logger.exception("Profile setup failed")
+        send_reply(chat_id, "Hmm, I couldn't catch that. Try: \"Your Name, Company, what you sell\"")
+
+
 def handle_brain_dump(chat_id: str, sender: str, text: str, message_id: str):
-    """Parse a brain dump and store as contact."""
+    """Parse a brain dump and store/merge as contact."""
     try:
         parsed = parse_brain_dump(text)
-        contact = create_contact(sender, parsed)
 
-        lines = [f"✅ Logged: {contact['name']}"]
-        if contact["company"]:
-            lines[0] += f" — {contact['company']}"
-        if contact["title"]:
-            lines[0] += f", {contact['title']}"
+        # Resolve follow-up date to actual ISO date
+        raw_date = parsed.get("follow_up_date", "")
+        if raw_date:
+            actual_date = resolve_follow_up_date(raw_date)
+            if actual_date:
+                parsed["follow_up_date_actual"] = actual_date
+
+        contact, is_new = find_and_merge_contact(sender, parsed)
+        fname = first_name(contact)
+
+        # Conversational confirmation
+        if is_new:
+            header = f"Got {contact['name']}!"
+            if contact["company"]:
+                header += f" {contact['company']}"
+                if contact["title"]:
+                    header += f", {contact['title']}"
+                header += "."
+        else:
+            header = f"Updated {contact['name']} — added the new info."
+
+        lines = [header]
+
         if contact["follow_up_date"] and contact["follow_up_action"]:
-            lines.append(f"📋 Follow-up: {contact['follow_up_date']} — {contact['follow_up_action']}")
-        if contact["personal_details"]:
-            lines.append(f"💬 Noted: {', '.join(contact['personal_details'])}")
-        if contact["temperature"] in (TEMP_HOT, TEMP_WARM) and contact["follow_up_action"]:
-            lines.append(f"✍️ Say 'draft for {first_name(contact)}' when you're ready to review")
+            date_display = contact["follow_up_date"]
+            lines.append(f"📋 {contact['follow_up_action']} — {date_display}")
 
-        send_message(chat_id, "\n".join(lines))
+        if contact["personal_details"]:
+            details = ", ".join(contact["personal_details"][:3])
+            lines.append(f"💬 {details}")
+
+        if contact["temperature"] in (TEMP_HOT, TEMP_WARM) and contact["follow_up_action"]:
+            lines.append(f"\nSay 'draft for {fname}' when you're ready ✍️")
+
+        send_reply(chat_id, "\n".join(lines))
         send_reaction(message_id, "like")
 
     except Exception as e:
         logger.exception("Brain dump parse failed")
-        send_message(chat_id, f"Couldn't parse that — try again? Error: {str(e)[:100]}")
+        send_reply(
+            chat_id,
+            "Hmm, I couldn't quite get that. Try something like:\n"
+            "\"Sarah Chen, Stripe, VP RevOps, wants case study, follow up Thursday\""
+        )
 
 
 def handle_summary(chat_id: str, sender: str):
     """Generate and send day summary."""
     user_list = get_user_contacts(sender)
     if not user_list:
-        send_message(chat_id, "No contacts logged yet. Text me about someone you met!")
+        send_reply(chat_id, "No contacts logged yet. Text me about someone you met!")
         return
 
     summary = generate_summary(user_list)
-    send_message(chat_id, summary)
+    send_reply(chat_id, summary)
+
+
+def _date_status(contact: dict) -> tuple[str, str]:
+    """Return (group, display) for a contact's follow-up date.
+
+    Groups: 'overdue', 'today', 'upcoming', 'none'.
+    """
+    actual = contact.get("follow_up_date_actual", "")
+    if not actual:
+        return "none", ""
+
+    try:
+        follow_date = date.fromisoformat(actual)
+    except ValueError:
+        return "none", contact.get("follow_up_date", "")
+
+    today = date.today()
+    delta = (follow_date - today).days
+
+    if delta < 0:
+        return "overdue", f"{abs(delta)} day{'s' if abs(delta) != 1 else ''} overdue"
+    if delta == 0:
+        return "today", "today"
+    if delta == 1:
+        return "upcoming", "tomorrow"
+    return "upcoming", f"in {delta} days"
 
 
 def handle_update(chat_id: str, sender: str):
-    """Morning update — replies, pending follow-ups, today's actions."""
+    """Morning update — date-aware, grouped by urgency."""
     user_list = get_user_contacts(sender)
     if not user_list:
-        send_message(chat_id, "No contacts yet. Get out there today! 💪")
+        send_reply(chat_id, "No contacts yet! Text me about someone you meet and I'll track everything. 🎯")
         return
 
+    profile = get_rep_profile(sender)
+    rep_name = profile.get("name", "").split()[0] if profile else ""
+
+    overdue = []
+    due_today = []
+    upcoming = []
     sent_contacts = []
-    unsent_hot = []
-    draft_ready = []
+    other = []
+
     for c in user_list:
         if c["sent"]:
             sent_contacts.append(c)
-        elif c["temperature"] == TEMP_HOT:
-            unsent_hot.append(c)
-        if c["draft"] and not c["sent"]:
-            draft_ready.append(c)
+            continue
 
-    lines = ["☀️ Here's your update:\n"]
+        group, display = _date_status(c)
+        if group == "overdue":
+            overdue.append((c, display))
+        elif group == "today":
+            due_today.append((c, display))
+        elif group == "upcoming":
+            upcoming.append((c, display))
+        else:
+            other.append(c)
+
+    greeting = f"Hey {rep_name}! " if rep_name else ""
+    lines = [f"{greeting}Here's your pipeline:\n"]
+
+    if overdue:
+        lines.append("🔴 OVERDUE")
+        for c, display in overdue:
+            draft_tag = " ✓ draft ready" if c["draft"] else ""
+            action = c["follow_up_action"] or "follow up"
+            lines.append(f"  • {c['name']} ({c['company']}) — {action} — {display}{draft_tag}")
+            lines.append(f"    → 'draft for {first_name(c)}'")
+
+    if due_today:
+        lines.append("\n🟡 DUE TODAY")
+        for c, display in due_today:
+            draft_tag = " ✓ draft ready" if c["draft"] else ""
+            action = c["follow_up_action"] or "follow up"
+            lines.append(f"  • {c['name']} ({c['company']}) — {action}{draft_tag}")
+            lines.append(f"    → 'draft for {first_name(c)}'")
+
+    if upcoming:
+        lines.append("\n🟢 COMING UP")
+        for c, display in upcoming:
+            action = c["follow_up_action"] or "follow up"
+            lines.append(f"  • {c['name']} ({c['company']}) — {action} ({display})")
 
     if sent_contacts:
-        lines.append("📬 SENT:")
+        lines.append("\n📬 SENT")
         for c in sent_contacts:
             if c["reply_received"]:
                 status = f"replied: \"{c['reply_received']}\""
@@ -170,18 +455,19 @@ def handle_update(chat_id: str, sender: str):
                 status = "delivered"
             lines.append(f"  • {c['name']} ({c['company']}) — {status}")
 
-    if unsent_hot:
-        lines.append("\n🔴 NEEDS FOLLOW-UP TODAY:")
-        for c in unsent_hot:
-            draft_status = "draft ready ✓" if c["draft"] else "no draft yet"
-            lines.append(f"  • {c['name']} ({c['company']}) — {c['follow_up_action']} [{draft_status}]")
+    if other:
+        lines.append("\n📋 NO DATE SET")
+        for c in other:
+            draft_tag = " ✓ draft ready" if c["draft"] else ""
+            lines.append(f"  • {c['name']} ({c['company']}){draft_tag}")
 
-    if draft_ready:
-        lines.append(f"\n✍️ {len(draft_ready)} draft(s) ready to review and send")
+    # Summary line
+    total = len(user_list)
+    followed = len(sent_contacts)
+    drafts = sum(1 for c in user_list if c["draft"] and not c["sent"])
+    lines.append(f"\n━━━━━━━━━━━━━━━━━━\n{total} contacts | {followed} sent | {drafts} drafts ready")
 
-    lines.append(f"\n🔢 Totals: {len(user_list)} contacts, {len(sent_contacts)} followed up")
-
-    send_message(chat_id, "\n".join(lines))
+    send_reply(chat_id, "\n".join(lines))
 
 
 def handle_draft_request(chat_id: str, sender: str, name_query: str):
@@ -189,11 +475,12 @@ def handle_draft_request(chat_id: str, sender: str, name_query: str):
     contact = find_contact_by_name(sender, name_query)
 
     if not contact:
-        send_message(chat_id, f"Couldn't find anyone named '{name_query}'. Try 'contacts' to see your list.")
+        send_reply(chat_id, f"Can't find '{name_query}' — try 'contacts' to see who you've logged.")
         return
 
     if not contact["draft"]:
-        draft = draft_follow_up(contact)
+        profile = get_rep_profile(sender)
+        draft = draft_follow_up(contact, rep_profile=profile)
         contact = update_contact(contact["id"], draft=draft) or contact
 
     with _draft_lock:
@@ -204,7 +491,7 @@ def handle_draft_request(chat_id: str, sender: str, name_query: str):
     else:
         footer = "⚠️ No phone number on file — tell me their number and I'll send it"
 
-    send_message(chat_id, _format_draft_preview(contact, footer))
+    send_reply(chat_id, _format_draft_preview(contact, footer))
 
 
 def handle_send(chat_id: str, sender: str, text: str):
@@ -221,24 +508,25 @@ def handle_send(chat_id: str, sender: str, text: str):
             contact = get_contact_by_id(contact_id)
 
     if not contact:
-        send_message(chat_id, "Send what? Review a draft first — say 'draft for [name]'")
+        send_reply(chat_id, "Send what? Review a draft first — say 'draft for [name]'")
         return
 
     if not contact.get("draft"):
-        send_message(chat_id, f"No draft ready for {contact['name']}. Say 'draft for {first_name(contact)}' first.")
+        send_reply(chat_id, f"No draft ready for {contact['name']}. Say 'draft for {first_name(contact)}' first.")
         return
 
     if not contact.get("phone"):
-        send_message(chat_id, f"I don't have a phone number for {contact['name']}. Text me their number.")
+        send_reply(chat_id, f"I don't have a phone number for {contact['name']}. Text me their number.")
         return
 
     result = send_message_to_phone(contact["phone"], contact["draft"])
 
-    if "error" not in result:
+    if result.get("success"):
         update_contact(contact["id"], sent=True, sent_at=datetime.now().isoformat())
-        send_message(chat_id, f"✅ Sent to {contact['name']} ({contact['phone']})\n📱 Delivered via iMessage")
+        service = result.get("service", "iMessage")
+        send_reply(chat_id, f"✅ Sent to {contact['name']} ({contact['phone']})\n📱 Delivered via {service}")
     else:
-        send_message(chat_id, f"❌ Couldn't send: {result['error']}\nCheck the phone number and try again.")
+        send_reply(chat_id, f"❌ Couldn't send: {result.get('error', 'unknown')}\nCheck the phone number and try again.")
 
 
 def handle_edit(chat_id: str, sender: str, text: str):
@@ -246,48 +534,50 @@ def handle_edit(chat_id: str, sender: str, text: str):
     with _draft_lock:
         contact_id = last_draft_shown.get(sender)
     if not contact_id:
-        send_message(chat_id, "Nothing to edit. Review a draft first — say 'draft for [name]'")
+        send_reply(chat_id, "Nothing to edit. Review a draft first — say 'draft for [name]'")
         return
 
     contact = get_contact_by_id(contact_id)
     if not contact:
-        send_message(chat_id, "Contact not found. Try 'draft for [name]' again.")
+        send_reply(chat_id, "Contact not found. Try 'draft for [name]' again.")
         return
 
     edit_instruction = text[5:].strip()
     draft = draft_follow_up({**contact, "notes": contact["notes"] + f" | Edit request: {edit_instruction}"})
     updated = update_contact(contact["id"], draft=draft)
 
-    send_message(chat_id, _format_draft_preview(updated or contact, "Reply SEND to send now, or edit again"))
+    send_reply(chat_id, _format_draft_preview(updated or contact, "Reply SEND to send now, or edit again"))
 
 
 def handle_help(chat_id: str):
     """Show available commands."""
     help_text = (
-        "🤖 LinqUp — Conference Contact Agent\n\n"
-        "Just text me about anyone you meet:\n"
-        "\"Sarah Chen, Stripe, VP RevOps, wants case study, follow up Thursday\"\n\n"
-        "Commands:\n"
-        "• summary — see everyone you've met today\n"
-        "• /update — morning briefing with replies and pending follow-ups\n"
-        "• draft for [name] — review AI-generated follow-up\n"
-        "• send — send the last draft as text\n"
-        "• send to [name] — send draft to specific person\n"
-        "• send [name] something — generate & send visual tiles\n"
-        "• follow up with [name] — visual follow-up with context\n"
-        "• edit [changes] — modify the last shown draft\n"
-        "• contacts — list all contacts\n"
-        "• help — this message\n\n"
-        "💡 Pro tip: Send voice memos for faster logging"
+        "LinqUp — AI Follow-Up Agent\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Text me about anyone you meet — I'll parse, store, and draft follow-ups.\n\n"
+        "CAPTURE\n"
+        "  Just text naturally or send a voice memo\n"
+        "  \"Sarah Chen, Stripe, VP RevOps, wants case study, follow up Thursday\"\n\n"
+        "COMMANDS\n"
+        "  update — your pipeline: overdue, today, upcoming\n"
+        "  contacts — list all saved contacts\n"
+        "  summary — AI-generated day recap\n"
+        "  draft for [name] — generate follow-up message\n"
+        "  send — send last reviewed draft\n"
+        "  send to [name] — send draft to specific contact\n"
+        "  send [name] something — send visual follow-up\n"
+        "  edit [changes] — revise last draft\n"
+        "  /setup — update your profile\n"
+        "  help — this reference"
     )
-    send_message(chat_id, help_text)
+    send_reply(chat_id, help_text)
 
 
 def handle_list(chat_id: str, sender: str):
     """List all contacts."""
     user_list = get_user_contacts(sender)
     if not user_list:
-        send_message(chat_id, "No contacts yet. Text me about someone you met!")
+        send_reply(chat_id, "No contacts yet. Text me about someone you met!")
         return
 
     lines = [f"📇 Your contacts ({len(user_list)}):\n"]
@@ -300,7 +590,7 @@ def handle_list(chat_id: str, sender: str):
             status = "📋 logged"
         lines.append(f"• {c['name']} — {c['company']} [{status}]")
 
-    send_message(chat_id, "\n".join(lines))
+    send_reply(chat_id, "\n".join(lines))
 
 
 def _is_visual_send(text_lower: str) -> bool:
@@ -322,7 +612,12 @@ def _parse_visual_command(text: str) -> tuple[str, str]:
             idx = rest.lower().index(keyword)
             name = rest[:idx].strip().rstrip(",").strip()
             hint_raw = rest[idx + len(keyword):]
-            hint = hint_raw.strip().lstrip("about").lstrip("on").strip() if hint_raw else ""
+            hint = hint_raw.strip()
+            for prefix in ("about ", "on "):
+                if hint.lower().startswith(prefix):
+                    hint = hint[len(prefix):]
+                    break
+            hint = hint.strip() if hint else ""
             return name, hint
 
     return rest, ""
@@ -343,57 +638,84 @@ def _parse_follow_up_command(text: str) -> tuple[str, str]:
 
 
 def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: str = None):
-    """Generate and send visual tile deck to a contact."""
-    from tiles.engine import generate_and_send_deck
+    """Generate and send text-based tile deck to a contact."""
+    from tiles.engine import generate_and_send_text_deck
 
     contact = find_contact_by_name(sender, name_query)
     if not contact:
-        send_message(chat_id, f"Can't find anyone named '{name_query}'. Try 'contacts' to see your list.")
+        send_reply(chat_id, f"Can't find '{name_query}' — try 'contacts' to see who you've logged.")
         return
 
     if not contact.get("phone"):
-        send_message(chat_id, f"No phone number for {contact['name']}. Send me their number first.")
+        send_reply(chat_id, f"I don't have a number for {contact['name']} yet. Text me their number and I'll save it.")
         return
 
-    send_message(chat_id, f"🎨 Generating tiles for {first_name(contact)}...")
+    send_reply(chat_id, f"Putting something together for {first_name(contact)}... ✨")
 
-    result = generate_and_send_deck(contact, hint=hint)
+    result = generate_and_send_text_deck(contact, hint=hint)
 
     if result.get("success"):
         deck_type = result.get("deck_type", "")
         num = result.get("num_tiles", 0)
         update_contact(contact["id"], sent=True, sent_at=datetime.now().isoformat())
-        send_message(chat_id, f"✅ Sent {num} {deck_type} tiles to {contact['name']}")
+        send_reply(chat_id, f"Sent! {num} {deck_type} messages to {contact['name']} 🚀")
     else:
-        send_message(chat_id, f"❌ Couldn't generate tiles: {result.get('error', 'unknown')}")
+        send_reply(chat_id, f"Something went wrong generating tiles — {result.get('error', 'try again?')}")
 
 
 # === FLASK WEBHOOK ENDPOINT ===
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Handle incoming Linq webhook events."""
-    event = request.json
-    if not event or not isinstance(event, dict):
+    """Handle incoming Linq v3 webhook events."""
+    payload = request.json
+    print("=" * 60, file=sys.stderr)
+    print("WEBHOOK HIT", file=sys.stderr)
+    print(json.dumps(payload, indent=2) if payload else "NO PAYLOAD", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+    sys.stderr.flush()
+
+    if not payload or not isinstance(payload, dict):
         return jsonify({"status": "bad request"}), 400
 
-    event_type = event.get("type", "")
+    event_type = payload.get("event_type", "")
 
-    if event_type == "message.received":
-        data = event.get("data", {})
-        chat_id = data.get("chatId", "")
-        sender = data.get("sender", "")
-        text = data.get("text", "")
-        message_id = data.get("messageId", "")
-        attachments = data.get("attachments", [])
+    # Only process inbound messages — ignore typing, sent, delivered, read events
+    if event_type != "message.received":
+        return jsonify({"status": "ignored", "event_type": event_type}), 200
 
-        if not chat_id or not sender:
-            return jsonify({"status": "missing fields"}), 400
+    data = payload.get("data", {})
 
-        if sender == LINQ_PHONE_NUMBER:
-            return jsonify({"status": "ignored"}), 200
+    # Skip non-inbound messages (outbound = messages we sent)
+    if data.get("direction") != "inbound":
+        return jsonify({"status": "ignored", "reason": "not inbound"}), 200
 
-        executor.submit(process_message, chat_id, sender, text, message_id, attachments)
+    # Extract fields from actual Linq v3 payload structure
+    chat = data.get("chat", {})
+    chat_id = chat.get("id", "")
+    sender_handle = data.get("sender_handle", {})
+    sender = sender_handle.get("handle", "")
+    message_id = data.get("id", "")
+
+    # Extract text from parts array
+    parts = data.get("parts", [])
+    text = ""
+    attachments = []
+    for part in parts:
+        part_type = part.get("type", "")
+        if part_type == "text":
+            text = part.get("value", "")
+        elif part_type.startswith("audio"):
+            attachments.append({"type": part_type, "url": part.get("value", "")})
+
+    if not chat_id or not sender:
+        return jsonify({"status": "missing fields"}), 400
+
+    # Ignore messages from our own bot number
+    if sender == LINQ_PHONE_NUMBER:
+        return jsonify({"status": "ignored"}), 200
+
+    executor.submit(process_message, chat_id, sender, text, message_id, attachments)
 
     return jsonify({"status": "ok"}), 200
 

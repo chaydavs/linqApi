@@ -31,7 +31,8 @@ def transcribe_voice_memo(audio_url: str) -> str:
         with open(temp_path, "rb") as audio_file:
             transcript = _get_openai_client().audio.transcriptions.create(
                 model="whisper-1",
-                file=audio_file
+                file=audio_file,
+                timeout=60.0,
             )
         return transcript.text
     finally:
