@@ -1,16 +1,27 @@
+import logging
 import requests
 import tempfile
 import os
 from openai import OpenAI
 from config import OPENAI_API_KEY
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+logger = logging.getLogger(__name__)
+
+_openai_client = None
+
+
+def _get_openai_client() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client
 
 
 def transcribe_voice_memo(audio_url: str) -> str:
     """Download voice memo from Linq webhook data and transcribe with Whisper."""
-    audio_response = requests.get(audio_url)
+    audio_response = requests.get(audio_url, timeout=30)
     audio_response.raise_for_status()
+    logger.info("Downloaded voice memo (%d bytes)", len(audio_response.content))
 
     with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as f:
         f.write(audio_response.content)
@@ -18,9 +29,10 @@ def transcribe_voice_memo(audio_url: str) -> str:
 
     try:
         with open(temp_path, "rb") as audio_file:
-            transcript = openai_client.audio.transcriptions.create(
+            transcript = _get_openai_client().audio.transcriptions.create(
                 model="whisper-1",
-                file=audio_file
+                file=audio_file,
+                timeout=60.0,
             )
         return transcript.text
     finally:

@@ -1,81 +1,121 @@
+import json
+import logging
+from typing import Any, Optional
 import requests
-from config import LINQ_API_TOKEN, LINQ_BASE_URL
+from config import LINQ_API_TOKEN, LINQ_BASE_URL, LINQ_PHONE_NUMBER
 
-HEADERS = {
+logger = logging.getLogger(__name__)
+
+session = requests.Session()
+session.headers.update({
     "Authorization": f"Bearer {LINQ_API_TOKEN}",
     "Content-Type": "application/json"
-}
+})
 
 
-def send_message(chat_id: str, text: str, effect: str = None) -> dict:
-    """Send an iMessage to a chat. Returns message data including ID."""
-    url = f"{LINQ_BASE_URL}/chats/{chat_id}/messages"
-    payload = {"text": text}
-    if effect:
-        payload["effect"] = effect
-    resp = requests.post(url, json=payload, headers=HEADERS)
-    return resp.json()
+def _linq_request(method: str, path: str, json_body: Optional[dict[str, Any]] = None) -> None:
+    """Fire-and-forget request to Linq API. Logs failures instead of raising."""
+    url = f"{LINQ_BASE_URL}{path}"
+    try:
+        session.request(method, url, json=json_body, timeout=5)
+    except requests.RequestException as e:
+        logger.warning("Linq API %s %s failed: %s", method, path, e)
 
 
-def send_message_to_phone(phone_number: str, text: str) -> dict:
-    """Send an iMessage directly to a phone number (for follow-ups to contacts).
+def send_message_to_phone(
+    phone_number: str, text: str, effect: Optional[str] = None
+) -> dict[str, Any]:
+    """Send a new iMessage to a phone number (outbound to contact).
 
-    NOTE: Check sandbox docs for exact endpoint. This may need adjustment
-    based on the actual Linq Blue v3 API structure.
+    Uses POST /chats with from/to/message.parts format.
     """
-    # Attempt 1: Direct message to phone
-    url = f"{LINQ_BASE_URL}/messages"
-    payload = {"to": phone_number, "text": text}
-    resp = requests.post(url, json=payload, headers=HEADERS)
+    url = f"{LINQ_BASE_URL}/chats"
+    parts: list[dict[str, str]] = [{"type": "text", "value": text}]
+    message_obj: dict[str, Any] = {"parts": parts}
+    payload: dict[str, Any] = {
+        "from": LINQ_PHONE_NUMBER,
+        "to": [phone_number],
+        "message": message_obj,
+    }
+    if effect:
+        message_obj["effect"] = effect
 
-    if resp.status_code == 200:
-        return resp.json()
+    try:
+        print(f"[SEND_MSG] POST {url}", flush=True)
+        print(f"[SEND_MSG] payload: {json.dumps(payload)[:500]}", flush=True)
+        resp = session.post(url, json=payload, timeout=15)
+        print(f"[SEND_MSG] status={resp.status_code} body={resp.text[:300]}", flush=True)
+        resp.raise_for_status()
+        data = resp.json()
+        chat = data.get("chat", {})
+        message = chat.get("message", {})
+        return {
+            "success": True,
+            "chat_id": chat.get("id", ""),
+            "message_id": message.get("id", ""),
+            "service": chat.get("service", ""),
+        }
+    except (requests.RequestException, ValueError) as e:
+        logger.error("send_message_to_phone failed for %s: %s", phone_number, e)
+        print(f"[SEND_MSG] ERROR: {e}", flush=True)
+        return {"success": False, "error": str(e)}
 
-    # Attempt 2: Create chat first, then send message
-    chat_url = f"{LINQ_BASE_URL}/chats"
-    chat_resp = requests.post(chat_url, json={"participants": [phone_number]}, headers=HEADERS)
-    if chat_resp.status_code == 200:
-        chat_data = chat_resp.json()
-        chat_id = chat_data.get("id") or chat_data.get("chatId")
-        if chat_id:
-            return send_message(chat_id, text)
 
-    return {"error": "Could not send - check API docs for correct endpoint"}
+def send_reply(
+    chat_id: str, text: str, effect: Optional[str] = None
+) -> dict[str, Any]:
+    """Reply in an existing chat (responding to the rep).
+
+    Uses POST /chats/{chat_id}/messages with parts format.
+    """
+    url = f"{LINQ_BASE_URL}/chats/{chat_id}/messages"
+    message_obj: dict[str, Any] = {
+        "parts": [{"type": "text", "value": text}],
+    }
+    if effect:
+        message_obj["effect"] = effect
+    payload: dict[str, Any] = {"message": message_obj}
+
+    try:
+        print(f"[SEND_REPLY] POST {url}", flush=True)
+        print(f"[SEND_REPLY] payload: {payload}", flush=True)
+        resp = session.post(url, json=payload, timeout=15)
+        print(f"[SEND_REPLY] status={resp.status_code} body={resp.text[:300]}", flush=True)
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            "success": True,
+            "message_id": data.get("id", data.get("messageId", "")),
+        }
+    except (requests.RequestException, ValueError) as e:
+        logger.error("send_reply failed for chat %s: %s", chat_id, e)
+        print(f"[SEND_REPLY] ERROR: {e}", flush=True)
+        return {"success": False, "error": str(e)}
 
 
-def start_typing(chat_id: str):
+def send_image(_chat_id: str, _image_url: str) -> dict[str, Any]:
+    """Send an image in a chat. Stub — image format TBD from Linq docs."""
+    logger.warning("send_image called but image format is TBD")
+    return {"success": False, "error": "Image format TBD"}
+
+
+def start_typing(chat_id: str) -> None:
     """Show typing indicator."""
-    url = f"{LINQ_BASE_URL}/chats/{chat_id}/typing"
-    try:
-        requests.post(url, headers=HEADERS)
-    except requests.RequestException:
-        pass
+    _linq_request("POST", f"/chats/{chat_id}/typing")
 
 
-def stop_typing(chat_id: str):
+def stop_typing(chat_id: str) -> None:
     """Hide typing indicator."""
-    url = f"{LINQ_BASE_URL}/chats/{chat_id}/typing"
-    try:
-        requests.delete(url, headers=HEADERS)
-    except requests.RequestException:
-        pass
+    _linq_request("DELETE", f"/chats/{chat_id}/typing")
 
 
-def mark_read(chat_id: str):
+def mark_read(chat_id: str) -> None:
     """Mark chat as read."""
-    url = f"{LINQ_BASE_URL}/chats/{chat_id}/read"
-    try:
-        requests.post(url, headers=HEADERS)
-    except requests.RequestException:
-        pass
+    _linq_request("POST", f"/chats/{chat_id}/read")
 
 
-def send_reaction(message_id: str, reaction: str):
+def send_reaction(message_id: str, reaction: str) -> None:
     """React to a message."""
     if not message_id:
         return
-    url = f"{LINQ_BASE_URL}/messages/{message_id}/reactions"
-    try:
-        requests.post(url, json={"reaction": reaction}, headers=HEADERS)
-    except requests.RequestException:
-        pass
+    _linq_request("POST", f"/messages/{message_id}/reactions", {"reaction": reaction})
