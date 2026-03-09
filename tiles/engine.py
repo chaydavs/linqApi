@@ -84,7 +84,11 @@ def generate_tile_content(context: dict, deck_type: str, hint: Optional[str] = N
             prompt,
             max_tokens=1500,
         )
-        tiles = json.loads(_clean_json_response(raw))
+        try:
+            tiles = json.loads(_clean_json_response(raw))
+        except json.JSONDecodeError:
+            logger.error("Tile JSON parse failed twice")
+            raise ValueError("Could not generate tile content — please try again")
 
     # Ensure every tile has the accent color (immutable — new list of new dicts)
     return [
@@ -154,23 +158,56 @@ def generate_and_send_deck(contact: dict, hint: Optional[str] = None) -> dict:
 def _send_image_to_phone(phone: str, image_path: str):
     """Send an image file to a phone number via Linq API.
 
-    NOTE: The exact Linq API endpoint for image/media sending needs
-    to be confirmed against their sandbox docs. This is a best-guess
-    implementation that may need adjustment.
+    NOTE: Image sending format TBD — stubbed for now.
+    Text-only follow-ups work; images will be added once
+    the Linq media endpoint is confirmed.
     """
-    import base64
-    from linq_client import _linq_request
+    logger.warning("Image sending stubbed — skipping %s", image_path)
 
-    with open(image_path, "rb") as f:
-        image_data = base64.b64encode(f.read()).decode("utf-8")
 
-    _linq_request("POST", "/messages", {
-        "to": phone,
-        "attachments": [{
-            "type": "image/png",
-            "data": image_data,
-        }],
-    })
+def generate_and_send_text_deck(contact: dict, hint: Optional[str] = None) -> dict:
+    """Text-only pipeline: context → deck type → content → text messages → send.
+
+    Sends tile content as formatted text sequences via iMessage.
+    No Playwright or image rendering needed.
+    """
+    from linq_client import send_message_to_phone
+    from tiles.text_renderer import format_tiles_as_text
+
+    phone = contact.get("phone")
+    if not phone:
+        return {"success": False, "error": "No phone number for contact"}
+
+    try:
+        context = assemble_tile_context(contact)
+        deck_type = select_deck_type(context, hint)
+        tiles = generate_tile_content(context, deck_type, hint)
+        text_messages = format_tiles_as_text(tiles)
+
+        logger.info("Generated %d text tiles (%s) for %s", len(tiles), deck_type, contact.get("name"))
+
+        # Send intro
+        intro = f"Hey {get_first_name(contact)} — thought you'd find this interesting 👇"
+        send_message_to_phone(phone, intro)
+
+        # Send each tile as a separate message
+        for msg in text_messages:
+            if msg.strip():
+                send_message_to_phone(phone, msg)
+
+        # Send outro
+        outro = contact.get("draft") or "Let me know what you think!"
+        send_message_to_phone(phone, outro)
+
+        return {
+            "success": True,
+            "deck_type": deck_type,
+            "num_tiles": len(tiles),
+        }
+
+    except Exception as e:
+        logger.exception("Text tile deck failed for %s", contact.get("name"))
+        return {"success": False, "error": str(e)[:200]}
 
 
 def generate_preview_deck(contact: dict, hint: Optional[str] = None) -> dict:
