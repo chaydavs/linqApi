@@ -4,6 +4,8 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from typing import Optional
+
 from flask import Flask, request, jsonify
 
 from config import LINQ_PHONE_NUMBER, PORT, TEMP_HOT, TEMP_WARM
@@ -87,7 +89,7 @@ def _fast_path_route(text_lower: str) -> str:
 _onboarding_pending = set()  # sender phones awaiting profile response
 
 
-def process_message(chat_id: str, sender: str, text: str, message_id: str, attachments: list = None):
+def process_message(chat_id: str, sender: str, text: str, message_id: str, attachments: Optional[list[dict[str, str]]] = None):
     """Route incoming message to the right handler using intent classification."""
     print(f"[PROCESS] chat_id={chat_id} sender={sender} text={text!r} msg_id={message_id}", flush=True)
     start_typing(chat_id)
@@ -183,9 +185,9 @@ def process_message(chat_id: str, sender: str, text: str, message_id: str, attac
         user_contacts = get_user_contacts(sender)
         contact_names = [c["name"] for c in user_contacts]
         intent_result = classify_intent(text, contact_names)
-        intent = intent_result.get("intent", "brain_dump")
-        name = intent_result.get("name", "").strip()
-        reply_text = intent_result.get("reply", "")
+        intent = intent_result.get("intent") or "brain_dump"
+        name = (intent_result.get("name") or "").strip()
+        reply_text = intent_result.get("reply") or ""
 
         print(f"[INTENT] {intent} name={name!r} reply={reply_text!r}", flush=True)
 
@@ -299,6 +301,7 @@ def handle_setup(chat_id: str, sender: str, text: str):
         send_reply(chat_id, msg)
     except Exception:
         logger.exception("Profile setup failed")
+        _onboarding_pending.add(sender)
         send_reply(chat_id, "Hmm, I couldn't catch that. Try: \"Your Name, Company, what you sell\"")
 
 
@@ -637,7 +640,7 @@ def _parse_follow_up_command(text: str) -> tuple[str, str]:
     return rest, ""
 
 
-def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: str = None):
+def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: Optional[str] = None):
     """Generate and send text-based tile deck to a contact."""
     from tiles.engine import generate_and_send_text_deck
 

@@ -1,13 +1,16 @@
 import logging
-import requests
-import tempfile
 import os
+import tempfile
+from typing import Optional
+
+import requests
 from openai import OpenAI
+
 from config import OPENAI_API_KEY
 
 logger = logging.getLogger(__name__)
 
-_openai_client = None
+_openai_client: Optional[OpenAI] = None
 
 
 def _get_openai_client() -> OpenAI:

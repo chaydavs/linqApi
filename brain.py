@@ -7,7 +7,7 @@ from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 
 logger = logging.getLogger(__name__)
 
-_client = None
+_client: Optional[anthropic.Anthropic] = None
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -113,7 +113,9 @@ def _call_claude(system: str, user_content: str, max_tokens: int = 500) -> str:
         messages=[{"role": "user", "content": user_content}],
         timeout=30.0,
     )
-    return response.content[0].text.strip()
+    block = response.content[0]
+    text = block.text if hasattr(block, "text") else str(block)
+    return text.strip()
 
 
 INTENT_SYSTEM_PROMPT = """You are a message intent classifier for a conference contact management bot.
