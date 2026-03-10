@@ -697,11 +697,7 @@ def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: Op
             shutil.copy2(src_path, dest_path)
             served_paths.append(dest_path)
 
-            # Build public URL — use request context if available, else localhost
-            try:
-                base = _get_public_base_url()
-            except RuntimeError:
-                base = f"http://localhost:{PORT}"
+            base = _get_public_base_url()
             public_urls.append(f"{base}/tile-images/{filename}")
 
         # Send each tile image via Linq as an attachment
@@ -743,14 +739,28 @@ def serve_tile_image(filename: str):
     return send_file(filepath, mimetype="image/png")
 
 
-def _get_public_base_url() -> str:
-    """Get the public base URL (ngrok or localhost) for serving tile images."""
-    # Check X-Forwarded-Host from ngrok, or fall back to request.host_url
+# Cached public base URL — captured from webhook request headers (ngrok sets these)
+_public_base_url: str = ""
+
+
+def _capture_public_base_url() -> None:
+    """Capture the public base URL from the current request context.
+
+    Must be called from within a Flask request (e.g., the webhook handler).
+    Stores the URL globally so background threads can use it.
+    """
+    global _public_base_url
     forwarded = request.headers.get("X-Forwarded-Host", "")
     if forwarded:
         proto = request.headers.get("X-Forwarded-Proto", "https")
-        return f"{proto}://{forwarded}"
-    return request.host_url.rstrip("/")
+        _public_base_url = f"{proto}://{forwarded}"
+    elif not _public_base_url:
+        _public_base_url = request.host_url.rstrip("/")
+
+
+def _get_public_base_url() -> str:
+    """Get the public base URL for serving tile images."""
+    return _public_base_url or f"http://localhost:{PORT}"
 
 
 # === FLASK WEBHOOK ENDPOINT ===
@@ -767,6 +777,9 @@ def webhook():
 
     if not payload or not isinstance(payload, dict):
         return jsonify({"status": "bad request"}), 400
+
+    # Capture the public URL (ngrok) while we have request context
+    _capture_public_base_url()
 
     event_type = payload.get("event_type", "")
 
