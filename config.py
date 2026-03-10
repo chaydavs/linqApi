@@ -12,6 +12,14 @@ PORT = int(os.getenv("PORT", 3000))
 
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
 
+# Validate required env vars at startup
+_REQUIRED = {"ANTHROPIC_API_KEY": ANTHROPIC_API_KEY, "LINQ_API_TOKEN": LINQ_API_TOKEN, "LINQ_PHONE_NUMBER": LINQ_PHONE_NUMBER}
+_missing = [k for k, v in _REQUIRED.items() if not v]
+if _missing:
+    import sys
+    print(f"[FATAL] Missing required env vars: {', '.join(_missing)}", flush=True)
+    sys.exit(1)
+
 TEMP_HOT = "hot"
 TEMP_WARM = "warm"
 TEMP_SAVED = "saved"

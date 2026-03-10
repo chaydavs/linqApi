@@ -546,7 +546,8 @@ def handle_edit(chat_id: str, sender: str, text: str):
         return
 
     edit_instruction = text[5:].strip()
-    draft = draft_follow_up({**contact, "notes": contact["notes"] + f" | Edit request: {edit_instruction}"})
+    profile = get_rep_profile(sender)
+    draft = draft_follow_up({**contact, "notes": contact["notes"] + f" | Edit request: {edit_instruction}"}, rep_profile=profile)
     updated = update_contact(contact["id"], draft=draft)
 
     send_reply(chat_id, _format_draft_preview(updated or contact, "Reply SEND to send now, or edit again"))
