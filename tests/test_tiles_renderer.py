@@ -364,13 +364,13 @@ class TestTileInnerHtmlCta:
     def test_cta_text_in_output(self) -> None:
         assert "Book a quick demo →" in self._cta()
 
-    def test_cta_button_class_used(self) -> None:
-        assert 'class="cta-button"' in self._cta()
+    def test_cta_border_style_used(self) -> None:
+        assert "border" in self._cta()
 
     def test_default_cta_text_when_missing(self) -> None:
         tile: dict[str, str] = {"type": "cta", "accent": "#A78BFA", "headline": "Let's talk"}
         html: str = _tile_inner_html(tile)
-        assert "Let&#x27;s talk →" in html
+        assert "Let me know what you think" in html
 
 
 # ---------------------------------------------------------------------------

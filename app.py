@@ -51,6 +51,9 @@ executor = ThreadPoolExecutor(max_workers=10)
 _draft_lock = threading.Lock()
 last_draft_shown = {}  # sender_phone -> contact_id
 
+# Track pending visual deck confirmations
+_visual_pending = {}  # sender_phone -> {"contact_id": str, "hint": str}
+
 
 def _format_draft_preview(contact: dict, footer: str) -> str:
     """Build the draft preview message shown to the user."""
@@ -105,6 +108,22 @@ def process_message(chat_id: str, sender: str, text: str, message_id: str, attac
             _onboarding_pending.discard(sender)
             handle_setup(chat_id, sender, text)
             return
+
+        # Check if user is confirming a visual deck generation
+        if sender in _visual_pending and text and text.strip():
+            pending = _visual_pending.pop(sender)
+            contact = get_contact_by_id(pending["contact_id"])
+            if contact:
+                # "go", "yes", "do it", "looks good" etc. → generate with existing hint
+                confirmation_words = ("go", "yes", "do it", "looks good", "perfect", "send it", "generate", "make it", "yep", "yeah", "ok", "sure")
+                if text_lower in confirmation_words or text_lower.startswith("go"):
+                    _build_visual_deck(chat_id, sender, contact, pending.get("hint"))
+                else:
+                    # User added more context — use their message as additional hint
+                    extra_hint = text.strip()
+                    combined_hint = f"{pending.get('hint', '')} {extra_hint}".strip() if pending.get("hint") else extra_hint
+                    _build_visual_deck(chat_id, sender, contact, combined_hint)
+                return
 
         # First-time user onboarding
         profile = get_rep_profile(sender)
@@ -314,6 +333,7 @@ def handle_restart(chat_id: str, sender: str):
     """Clear all data for this user and restart from onboarding."""
     count = clear_user_data(sender)
     _onboarding_pending.discard(sender)
+    _visual_pending.pop(sender, None)
     with _draft_lock:
         last_draft_shown.pop(sender, None)
 
@@ -666,20 +686,52 @@ def _parse_follow_up_command(text: str) -> tuple[str, str]:
 
 
 def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: Optional[str] = None):
-    """Generate tile deck as PNG images and send them in-chat for the rep to preview."""
-    from tiles.engine import generate_image_tile_preview
-    from tiles.image_converter import cleanup_images
-    import shutil
-
+    """Step 1: Show contact summary and ask for confirmation before generating tiles."""
     contact = find_contact_by_name(sender, name_query)
     if not contact:
         send_reply(chat_id, f"Can't find '{name_query}' — try 'contacts' to see who you've logged.")
         return
 
-    send_reply(chat_id, f"Building a deck for {first_name(contact)}... ✨")
+    # Build context summary for the rep
+    fname = first_name(contact)
+    lines = [f"Here's what I have on {contact['name']}:\n"]
+
+    if contact.get("company"):
+        line = f"🏢 {contact['company']}"
+        if contact.get("title"):
+            line += f" — {contact['title']}"
+        lines.append(line)
+
+    if contact.get("notes"):
+        lines.append(f"📋 {contact['notes']}")
+
+    if contact.get("follow_up_action"):
+        date_info = f" ({contact['follow_up_date']})" if contact.get("follow_up_date") else ""
+        lines.append(f"📅 {contact['follow_up_action']}{date_info}")
+
+    if contact.get("personal_details"):
+        details = ", ".join(contact["personal_details"][:3])
+        lines.append(f"💬 {details}")
+
+    lines.append(f"\n🎯 Temperature: {contact.get('temperature', 'warm')}")
+    lines.append(f"\nWant me to build the deck with this? Say GO or tell me anything to add.")
+
+    # Store pending state
+    _visual_pending[sender] = {"contact_id": contact["id"], "hint": hint or ""}
+
+    send_reply(chat_id, "\n".join(lines))
+
+
+def _build_visual_deck(chat_id: str, sender: str, contact: dict, hint: Optional[str] = None):
+    """Step 2: Actually generate tile images and send as gallery."""
+    from tiles.engine import generate_image_tile_preview
+    from tiles.image_converter import cleanup_images
+    import shutil
+
+    fname = first_name(contact)
+    send_reply(chat_id, f"Building a deck for {fname}... ✨")
 
     image_paths = []
-    served_paths = []
     try:
         result = generate_image_tile_preview(contact, hint=hint)
         deck_type = result.get("deck_type", "")
@@ -691,13 +743,11 @@ def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: Op
 
         # Copy images to the serving directory and build public URLs
         public_urls = []
+        base = _get_public_base_url()
         for i, src_path in enumerate(image_paths):
             filename = f"{sender.replace('+', '')}_{contact['id']}_{i}.png"
             dest_path = _os.path.join(_TILE_IMAGE_DIR, filename)
             shutil.copy2(src_path, dest_path)
-            served_paths.append(dest_path)
-
-            base = _get_public_base_url()
             public_urls.append(f"{base}/tile-images/{filename}")
 
         # Send all tile images as a single gallery message (swipeable in iMessage)
@@ -708,12 +758,9 @@ def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: Op
 
         # Closing summary
         num = len(image_paths)
-        phone_info = f" to {contact['phone']}" if contact.get("phone") else ""
         send_reply(
             chat_id,
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"📋 {num} {deck_type} slides for {contact['name']}\n"
-            f"Forward these{phone_info} when ready!"
+            f"📋 {num} {deck_type} slides for {contact['name']} — forward when ready!"
         )
     except Exception:
         logger.exception("Tile image generation failed for %s", contact.get("name"))

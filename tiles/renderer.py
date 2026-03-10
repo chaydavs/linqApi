@@ -35,11 +35,12 @@ def _base_css(accent: str) -> str:
     .tile {{
         width: 100%;
         height: 100%;
-        padding: 80px 56px;
+        padding: 80px 60px;
         display: flex;
         flex-direction: column;
         justify-content: flex-start;
-        padding-top: 120px;
+        padding-top: 100px;
+        border-top: 5px solid {accent}50;
     }}
 
     .tag {{
@@ -197,11 +198,14 @@ def _tile_inner_html(tile: dict) -> str:
         <p class="body" style="font-size:38px;color:#F1F5F9;line-height:1.5;">{h(tile.get('body', ''))}</p>"""
 
     elif t == "cta":
+        cta_text = tile.get('cta_text', "Let me know what you think")
         return f"""
-        <div style="text-align:center;">
+        <div style="text-align:center;padding-top:40px;">
           <h2 class="headline" style="font-size:52px;white-space:pre-line;">{h(tile.get('headline', ''))}</h2>
-          <p class="body" style="margin-top:24px;">{h(tile.get('body', ''))}</p>
-          <div class="cta-button">{h(tile.get('cta_text', "Let's talk →"))}</div>
+          <p class="body" style="margin-top:32px;font-size:34px;">{h(tile.get('body', ''))}</p>
+          <div style="margin-top:64px;padding:32px 48px;border:3px solid {accent}60;border-radius:24px;display:inline-block;">
+            <span style="font-size:30px;font-weight:700;color:{accent};letter-spacing:1px;">{h(cta_text)}</span>
+          </div>
         </div>"""
 
     # Fallback

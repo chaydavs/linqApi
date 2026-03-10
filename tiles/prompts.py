@@ -37,7 +37,7 @@ Return ONLY valid JSON — an array of tile objects. Each tile has:
     "items": [
         {{"label": "...", "value": "...", "old_value": "...", "icon": "emoji"}}
     ],
-    "cta_text": "button text for CTA tiles",
+    "cta_text": "closing text for CTA tiles (NOT a clickable button — use friendly text like 'Forward this to your team' or 'Let me know what you think')",
     "accent": "{accent_hex}"
 }}
 
@@ -46,7 +46,7 @@ Rules:
 - Headlines under 8 words
 - Body text under 25 words per tile
 - Items arrays max 4 entries
-- CTA should feel low-pressure and reference something personal if possible
+- CTA should feel low-pressure, reference something personal, and be forwardable (NOT a clickable button — just text the recipient can act on)
 - The deck tells a STORY — each tile builds on the last
 - Return ONLY the JSON array, no markdown fences"""
 
@@ -57,14 +57,14 @@ DECK_GUIDELINES = {
 2. stat: One massive surprising stat about their industry
 3. list: 3 warning signs / symptoms the lead will recognize
 4. comparison: Legacy vs modern approach (old_value vs value)
-5. cta: Personal, low-pressure ask referencing the conversation""",
+5. cta: Personal, low-pressure closing — "Forward this to your team" or "Let me know your thoughts" """,
 
     "roi": """ROI DECK — 5 tiles:
 1. cover: "The Real Cost of Doing Nothing" framing
 2. stat: Industry-level cost figure
 3. math: Personalized calculation using their team size/details
 4. timeline: Visual payback roadmap (Week 1, Month 1, Month 3, Month 6)
-5. cta: "Share this with your VP?" — designed to be forwarded""",
+5. cta: "Forward this to your VP" — designed to be shared, not clicked""",
 
     "proof": """PROOF DECK — 4 tiles:
 1. cover: "How a [Similar Company] Cut Their [Metric] by X%"
@@ -75,13 +75,13 @@ DECK_GUIDELINES = {
     "personal": """PERSONAL DECK — 3 tiles:
 1. personal: Leads with the personal connection (emoji + bold headline)
 2. bridge: One sentence transitioning personal to professional
-3. cta: Casual ask, like texting a friend""",
+3. cta: Casual, warm closing — like texting a friend. No button, just text""",
 
     "competitive": """COMPETITIVE DECK — 4 tiles:
 1. cover: "Thinking about switching? Here's what changes."
 2. comparison: Feature-by-feature, their side grayed/muted, yours highlighted
 3. gain: What they'd GET in the first 90 days (not what they're missing)
-4. cta: Zero-risk framing — "Run both side by side for a week" """,
+4. cta: Zero-risk framing — "Try both side by side for a week" — no button, just text""",
 }
 
 
