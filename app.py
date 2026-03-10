@@ -33,7 +33,6 @@ from brain import (
 )
 from linq_client import (
     send_reply,
-    send_message_to_phone,
     start_typing,
     stop_typing,
     mark_read,
@@ -498,7 +497,7 @@ def handle_draft_request(chat_id: str, sender: str, name_query: str):
 
 
 def handle_send(chat_id: str, sender: str, text: str):
-    """Send the last shown draft to the contact."""
+    """Finalize and present the draft — ready for the rep to copy and send."""
     contact = None
 
     if text.lower().startswith("send to "):
@@ -518,18 +517,19 @@ def handle_send(chat_id: str, sender: str, text: str):
         send_reply(chat_id, f"No draft ready for {contact['name']}. Say 'draft for {first_name(contact)}' first.")
         return
 
-    if not contact.get("phone"):
-        send_reply(chat_id, f"I don't have a phone number for {contact['name']}. Text me their number.")
-        return
+    # Mark as finalized and present the ready-to-send message
+    update_contact(contact["id"], sent=True, sent_at=datetime.now().isoformat())
 
-    result = send_message_to_phone(contact["phone"], contact["draft"])
+    phone_line = f"\n📱 Send to: {contact['phone']}" if contact.get("phone") else ""
 
-    if result.get("success"):
-        update_contact(contact["id"], sent=True, sent_at=datetime.now().isoformat())
-        service = result.get("service", "iMessage")
-        send_reply(chat_id, f"✅ Sent to {contact['name']} ({contact['phone']})\n📱 Delivered via {service}")
-    else:
-        send_reply(chat_id, f"❌ Couldn't send: {result.get('error', 'unknown')}\nCheck the phone number and try again.")
+    send_reply(
+        chat_id,
+        f"✅ Finalized for {contact['name']} ({contact['company']}){phone_line}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"{contact['draft']}\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"Copy and send when ready! Say 'draft for [name]' to regenerate."
+    )
 
 
 def handle_edit(chat_id: str, sender: str, text: str):
@@ -567,9 +567,9 @@ def handle_help(chat_id: str):
         "  contacts — list all saved contacts\n"
         "  summary — AI-generated day recap\n"
         "  draft for [name] — generate follow-up message\n"
-        "  send — send last reviewed draft\n"
-        "  send to [name] — send draft to specific contact\n"
-        "  send [name] something — send visual follow-up\n"
+        "  send — finalize last draft (ready to copy & send)\n"
+        "  send to [name] — finalize draft for specific contact\n"
+        "  follow up with [name] — generate visual tile presentation\n"
         "  edit [changes] — revise last draft\n"
         "  /setup — update your profile\n"
         "  help — this reference"
@@ -642,29 +642,39 @@ def _parse_follow_up_command(text: str) -> tuple[str, str]:
 
 
 def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: Optional[str] = None):
-    """Generate and send text-based tile deck to a contact."""
-    from tiles.engine import generate_and_send_text_deck
+    """Generate tile deck and preview it to the rep in-chat."""
+    from tiles.engine import generate_tile_preview
 
     contact = find_contact_by_name(sender, name_query)
     if not contact:
         send_reply(chat_id, f"Can't find '{name_query}' — try 'contacts' to see who you've logged.")
         return
 
-    if not contact.get("phone"):
-        send_reply(chat_id, f"I don't have a number for {contact['name']} yet. Text me their number and I'll save it.")
-        return
-
     send_reply(chat_id, f"Putting something together for {first_name(contact)}... ✨")
 
-    result = generate_and_send_text_deck(contact, hint=hint)
-
-    if result.get("success"):
+    try:
+        result = generate_tile_preview(contact, hint=hint)
         deck_type = result.get("deck_type", "")
-        num = result.get("num_tiles", 0)
-        update_contact(contact["id"], sent=True, sent_at=datetime.now().isoformat())
-        send_reply(chat_id, f"Sent! {num} {deck_type} messages to {contact['name']} 🚀")
-    else:
-        send_reply(chat_id, f"Something went wrong generating tiles — {result.get('error', 'try again?')}")
+        text_messages = result.get("text_messages", [])
+
+        # Send each tile as a preview message to the rep
+        for msg in text_messages:
+            if msg.strip():
+                send_reply(chat_id, msg)
+
+        # Closing summary
+        num = len(text_messages)
+        phone_info = f" to {contact['phone']}" if contact.get("phone") else ""
+        send_reply(
+            chat_id,
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📋 {num} {deck_type} tiles for {contact['name']}\n"
+            f"Forward these{phone_info} when ready!\n"
+            f"Say 'draft for {first_name(contact)}' for a text-only follow-up instead."
+        )
+    except Exception:
+        logger.exception("Tile preview failed for %s", contact.get("name"))
+        send_reply(chat_id, "Something went wrong generating tiles — try again?")
 
 
 # === FLASK WEBHOOK ENDPOINT ===
