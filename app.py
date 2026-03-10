@@ -700,9 +700,12 @@ def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: Op
             base = _get_public_base_url()
             public_urls.append(f"{base}/tile-images/{filename}")
 
-        # Send each tile image via Linq as an attachment
+        # Send each tile image via Linq as media
         from linq_client import send_image_reply
+        print(f"[TILES] Public base URL: {base}", flush=True)
+        print(f"[TILES] Sending {len(public_urls)} image URLs", flush=True)
         for url in public_urls:
+            print(f"[TILES] Sending image: {url}", flush=True)
             send_image_reply(chat_id, url)
 
         # Closing summary
@@ -739,17 +742,41 @@ def serve_tile_image(filename: str):
     return send_file(filepath, mimetype="image/png")
 
 
-# Cached public base URL — captured from webhook request headers (ngrok sets these)
+# Cached public base URL for serving tile images via ngrok
 _public_base_url: str = ""
 
 
-def _capture_public_base_url() -> None:
-    """Capture the public base URL from the current request context.
+def _detect_ngrok_url() -> str:
+    """Query ngrok's local API to get the current public HTTPS tunnel URL."""
+    try:
+        import requests as _req
+        resp = _req.get("http://localhost:4040/api/tunnels", timeout=2)
+        tunnels = resp.json().get("tunnels", [])
+        for tunnel in tunnels:
+            if tunnel.get("proto") == "https":
+                return tunnel["public_url"]
+        if tunnels:
+            return tunnels[0]["public_url"]
+    except Exception:
+        pass
+    return ""
 
-    Must be called from within a Flask request (e.g., the webhook handler).
-    Stores the URL globally so background threads can use it.
+
+def _capture_public_base_url() -> None:
+    """Capture the public base URL from ngrok or request headers.
+
+    Tries ngrok local API first (most reliable), then X-Forwarded-Host headers.
     """
     global _public_base_url
+
+    # Try ngrok local API first
+    ngrok_url = _detect_ngrok_url()
+    if ngrok_url:
+        _public_base_url = ngrok_url.rstrip("/")
+        print(f"[NGROK] Detected public URL: {_public_base_url}", flush=True)
+        return
+
+    # Fallback: check request headers
     forwarded = request.headers.get("X-Forwarded-Host", "")
     if forwarded:
         proto = request.headers.get("X-Forwarded-Proto", "https")
