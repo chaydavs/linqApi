@@ -13,6 +13,7 @@ import re
 from datetime import date
 
 from contacts import (
+    clear_user_data,
     create_contact,
     find_and_merge_contact,
     get_contact_by_id,
@@ -79,6 +80,8 @@ def _fast_path_route(text_lower: str) -> str:
         return "edit"
     if text_lower.startswith("/setup"):
         return "setup"
+    if text_lower in ("/restart", "restart", "/reset", "reset"):
+        return "restart"
     if _is_visual_send(text_lower):
         return "visual_send"
     return ""
@@ -178,6 +181,9 @@ def process_message(chat_id: str, sender: str, text: str, message_id: str, attac
             else:
                 send_reply(chat_id, "Tell me about yourself! Example: \"Chay Davuluri, LinqUp, sales API platform\"")
                 _onboarding_pending.add(sender)
+            return
+        if fast == "restart":
+            handle_restart(chat_id, sender)
             return
 
         # No fast match — use Claude to classify intent
@@ -302,6 +308,23 @@ def handle_setup(chat_id: str, sender: str, text: str):
         logger.exception("Profile setup failed")
         _onboarding_pending.add(sender)
         send_reply(chat_id, "Hmm, I couldn't catch that. Try: \"Your Name, Company, what you sell\"")
+
+
+def handle_restart(chat_id: str, sender: str):
+    """Clear all data for this user and restart from onboarding."""
+    count = clear_user_data(sender)
+    _onboarding_pending.discard(sender)
+    with _draft_lock:
+        last_draft_shown.pop(sender, None)
+
+    _onboarding_pending.add(sender)
+    send_reply(
+        chat_id,
+        f"🔄 Reset! Cleared {count} contact{'s' if count != 1 else ''} and your profile.\n\n"
+        "Hey! I'm LinqUp — your follow-up sidekick. 👋\n\n"
+        "Quick intro — what's your name, company, and what do you sell?\n\n"
+        "Example: \"Chay Davuluri, LinqUp, sales API platform\""
+    )
 
 
 def handle_brain_dump(chat_id: str, sender: str, text: str, message_id: str):
@@ -572,6 +595,7 @@ def handle_help(chat_id: str):
         "  follow up with [name] — generate visual tile presentation\n"
         "  edit [changes] — revise last draft\n"
         "  /setup — update your profile\n"
+        "  /restart — clear everything and start fresh\n"
         "  help — this reference"
     )
     send_reply(chat_id, help_text)
