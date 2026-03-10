@@ -210,9 +210,19 @@ def generate_and_send_text_deck(contact: dict, hint: Optional[str] = None) -> di
         return {"success": False, "error": str(e)[:200]}
 
 
-def generate_preview_deck(contact: dict, hint: Optional[str] = None) -> dict:
-    """Generate tile content without rendering/sending — for preview."""
+def generate_tile_preview(contact: dict, hint: Optional[str] = None) -> dict:
+    """Generate tile content and return as formatted text messages for in-chat preview."""
+    from tiles.text_renderer import format_tiles_as_text
+
     context = assemble_tile_context(contact)
     deck_type = select_deck_type(context, hint)
     tiles = generate_tile_content(context, deck_type, hint)
-    return {"deck_type": deck_type, "tiles": tiles}
+    text_messages = format_tiles_as_text(tiles)
+
+    logger.info("Generated %d tile previews (%s) for %s", len(tiles), deck_type, contact.get("name"))
+
+    return {
+        "deck_type": deck_type,
+        "tiles": tiles,
+        "text_messages": text_messages,
+    }
