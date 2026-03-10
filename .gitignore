@@ -1,13 +1,25 @@
+# Environment and secrets
 .env
+
+# Python
 __pycache__/
 *.pyc
-.DS_Store
-venv/
 *.egg-info/
 dist/
 build/
-firebase-debug.log
+venv/
+
+# OS
+.DS_Store
+
+# Data (runtime persistence)
 data/
+
+# Claude Code / AI tooling
 .claude/
 CLAUDE.md
 CI_CD_PIPELINE.md
+
+# Logs
+firebase-debug.log
+*.log
