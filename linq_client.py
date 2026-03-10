@@ -94,23 +94,29 @@ def send_reply(
 
 
 def send_image_reply(chat_id: str, image_url: str) -> dict[str, Any]:
-    """Send an image attachment in an existing chat.
+    """Send a single image in an existing chat."""
+    return send_image_gallery(chat_id, [image_url])
 
-    Uses Linq v3 parts format with type "attachment" pointing to a public URL.
-    The image must be publicly accessible (e.g., via ngrok).
+
+def send_image_gallery(chat_id: str, image_urls: list[str]) -> dict[str, Any]:
+    """Send multiple images as a single message (renders as swipeable gallery in iMessage).
+
+    Each image URL becomes a separate "media" part in one message.
+    The images must be publicly accessible (e.g., via ngrok).
     """
     url = f"{LINQ_BASE_URL}/chats/{chat_id}/messages"
+    parts: list[dict[str, str]] = [{"type": "media", "url": img_url} for img_url in image_urls]
     payload: dict[str, Any] = {
-        "message": {
-            "parts": [{"type": "media", "url": image_url}],
-        }
+        "message": {"parts": parts}
     }
 
     try:
-        print(f"[SEND_IMAGE] POST {url}", flush=True)
-        print(f"[SEND_IMAGE] image_url: {image_url}", flush=True)
-        resp = session.post(url, json=payload, timeout=15)
-        print(f"[SEND_IMAGE] status={resp.status_code} body={resp.text[:300]}", flush=True)
+        print(f"[SEND_GALLERY] POST {url}", flush=True)
+        print(f"[SEND_GALLERY] {len(image_urls)} images in one message", flush=True)
+        for i, img_url in enumerate(image_urls):
+            print(f"[SEND_GALLERY]   [{i}] {img_url}", flush=True)
+        resp = session.post(url, json=payload, timeout=30)
+        print(f"[SEND_GALLERY] status={resp.status_code} body={resp.text[:300]}", flush=True)
         resp.raise_for_status()
         data = resp.json()
         return {
@@ -118,8 +124,8 @@ def send_image_reply(chat_id: str, image_url: str) -> dict[str, Any]:
             "message_id": data.get("id", data.get("messageId", "")),
         }
     except (requests.RequestException, ValueError) as e:
-        logger.error("send_image_reply failed for chat %s: %s", chat_id, e)
-        print(f"[SEND_IMAGE] ERROR: {e}", flush=True)
+        logger.error("send_image_gallery failed for chat %s: %s", chat_id, e)
+        print(f"[SEND_GALLERY] ERROR: {e}", flush=True)
         return {"success": False, "error": str(e)}
 
 

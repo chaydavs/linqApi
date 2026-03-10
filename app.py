@@ -700,13 +700,11 @@ def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: Op
             base = _get_public_base_url()
             public_urls.append(f"{base}/tile-images/{filename}")
 
-        # Send each tile image via Linq as media
-        from linq_client import send_image_reply
+        # Send all tile images as a single gallery message (swipeable in iMessage)
+        from linq_client import send_image_gallery
         print(f"[TILES] Public base URL: {base}", flush=True)
-        print(f"[TILES] Sending {len(public_urls)} image URLs", flush=True)
-        for url in public_urls:
-            print(f"[TILES] Sending image: {url}", flush=True)
-            send_image_reply(chat_id, url)
+        print(f"[TILES] Sending {len(public_urls)} images as gallery", flush=True)
+        send_image_gallery(chat_id, public_urls)
 
         # Closing summary
         num = len(image_paths)
