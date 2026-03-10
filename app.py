@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 
 from config import LINQ_PHONE_NUMBER, PORT, TEMP_HOT, TEMP_WARM
 import re
@@ -666,39 +666,91 @@ def _parse_follow_up_command(text: str) -> tuple[str, str]:
 
 
 def handle_visual_follow_up(chat_id: str, sender: str, name_query: str, hint: Optional[str] = None):
-    """Generate tile deck and preview it to the rep in-chat."""
-    from tiles.engine import generate_tile_preview
+    """Generate tile deck as PNG images and send them in-chat for the rep to preview."""
+    from tiles.engine import generate_image_tile_preview
+    from tiles.image_converter import cleanup_images
+    import shutil
 
     contact = find_contact_by_name(sender, name_query)
     if not contact:
         send_reply(chat_id, f"Can't find '{name_query}' — try 'contacts' to see who you've logged.")
         return
 
-    send_reply(chat_id, f"Putting something together for {first_name(contact)}... ✨")
+    send_reply(chat_id, f"Building a deck for {first_name(contact)}... ✨")
 
+    image_paths = []
+    served_paths = []
     try:
-        result = generate_tile_preview(contact, hint=hint)
+        result = generate_image_tile_preview(contact, hint=hint)
         deck_type = result.get("deck_type", "")
-        text_messages = result.get("text_messages", [])
+        image_paths = result.get("image_paths", [])
 
-        # Send each tile as a preview message to the rep
-        for msg in text_messages:
-            if msg.strip():
-                send_reply(chat_id, msg)
+        if not image_paths:
+            send_reply(chat_id, "Couldn't generate tile images — try again?")
+            return
+
+        # Copy images to the serving directory and build public URLs
+        public_urls = []
+        for i, src_path in enumerate(image_paths):
+            filename = f"{sender.replace('+', '')}_{contact['id']}_{i}.png"
+            dest_path = _os.path.join(_TILE_IMAGE_DIR, filename)
+            shutil.copy2(src_path, dest_path)
+            served_paths.append(dest_path)
+
+            # Build public URL — use request context if available, else localhost
+            try:
+                base = _get_public_base_url()
+            except RuntimeError:
+                base = f"http://localhost:{PORT}"
+            public_urls.append(f"{base}/tile-images/{filename}")
+
+        # Send each tile image via Linq as an attachment
+        from linq_client import send_image_reply
+        for url in public_urls:
+            send_image_reply(chat_id, url)
 
         # Closing summary
-        num = len(text_messages)
+        num = len(image_paths)
         phone_info = f" to {contact['phone']}" if contact.get("phone") else ""
         send_reply(
             chat_id,
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"📋 {num} {deck_type} tiles for {contact['name']}\n"
-            f"Forward these{phone_info} when ready!\n"
-            f"Say 'draft for {first_name(contact)}' for a text-only follow-up instead."
+            f"📋 {num} {deck_type} slides for {contact['name']}\n"
+            f"Forward these{phone_info} when ready!"
         )
     except Exception:
-        logger.exception("Tile preview failed for %s", contact.get("name"))
+        logger.exception("Tile image generation failed for %s", contact.get("name"))
         send_reply(chat_id, "Something went wrong generating tiles — try again?")
+    finally:
+        cleanup_images(image_paths)
+
+
+# === TILE IMAGE SERVING ===
+
+# Store generated tile images temporarily for serving via Flask
+import os as _os
+
+_TILE_IMAGE_DIR = _os.path.join(_os.path.dirname(__file__), "data", "tile_images")
+_os.makedirs(_TILE_IMAGE_DIR, exist_ok=True)
+
+
+@app.route("/tile-images/<filename>", methods=["GET"])
+def serve_tile_image(filename: str):
+    """Serve a generated tile image PNG."""
+    filepath = _os.path.join(_TILE_IMAGE_DIR, filename)
+    if not _os.path.isfile(filepath):
+        return jsonify({"error": "not found"}), 404
+    return send_file(filepath, mimetype="image/png")
+
+
+def _get_public_base_url() -> str:
+    """Get the public base URL (ngrok or localhost) for serving tile images."""
+    # Check X-Forwarded-Host from ngrok, or fall back to request.host_url
+    forwarded = request.headers.get("X-Forwarded-Host", "")
+    if forwarded:
+        proto = request.headers.get("X-Forwarded-Proto", "https")
+        return f"{proto}://{forwarded}"
+    return request.host_url.rstrip("/")
 
 
 # === FLASK WEBHOOK ENDPOINT ===

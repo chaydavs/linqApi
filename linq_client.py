@@ -93,10 +93,34 @@ def send_reply(
         return {"success": False, "error": str(e)}
 
 
-def send_image(_chat_id: str, _image_url: str) -> dict[str, Any]:
-    """Send an image in a chat. Stub — image format TBD from Linq docs."""
-    logger.warning("send_image called but image format is TBD")
-    return {"success": False, "error": "Image format TBD"}
+def send_image_reply(chat_id: str, image_url: str) -> dict[str, Any]:
+    """Send an image attachment in an existing chat.
+
+    Uses Linq v3 parts format with type "attachment" pointing to a public URL.
+    The image must be publicly accessible (e.g., via ngrok).
+    """
+    url = f"{LINQ_BASE_URL}/chats/{chat_id}/messages"
+    payload: dict[str, Any] = {
+        "message": {
+            "parts": [{"type": "media", "value": image_url}],
+        }
+    }
+
+    try:
+        print(f"[SEND_IMAGE] POST {url}", flush=True)
+        print(f"[SEND_IMAGE] image_url: {image_url}", flush=True)
+        resp = session.post(url, json=payload, timeout=15)
+        print(f"[SEND_IMAGE] status={resp.status_code} body={resp.text[:300]}", flush=True)
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            "success": True,
+            "message_id": data.get("id", data.get("messageId", "")),
+        }
+    except (requests.RequestException, ValueError) as e:
+        logger.error("send_image_reply failed for chat %s: %s", chat_id, e)
+        print(f"[SEND_IMAGE] ERROR: {e}", flush=True)
+        return {"success": False, "error": str(e)}
 
 
 def start_typing(chat_id: str) -> None:

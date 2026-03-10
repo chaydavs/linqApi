@@ -226,3 +226,30 @@ def generate_tile_preview(contact: dict, hint: Optional[str] = None) -> dict:
         "tiles": tiles,
         "text_messages": text_messages,
     }
+
+
+def generate_image_tile_preview(contact: dict, hint: Optional[str] = None) -> dict:
+    """Generate tile images (HTML → PNG via Playwright) for in-chat preview.
+
+    Returns dict with deck_type, tile image paths, and tile data.
+    Caller is responsible for cleanup via cleanup_images().
+    """
+    context = assemble_tile_context(contact)
+    deck_type = select_deck_type(context, hint)
+    tiles = generate_tile_content(context, deck_type, hint)
+
+    # Render HTML pages for each tile
+    html_pages = [
+        render_tile_html(tile, deck_type=deck_type, tile_index=i)
+        for i, tile in enumerate(tiles)
+    ]
+
+    # Convert to PNG images via Playwright
+    image_paths = render_deck_images(html_pages)
+    logger.info("Generated %d tile images (%s) for %s", len(image_paths), deck_type, contact.get("name"))
+
+    return {
+        "deck_type": deck_type,
+        "tiles": tiles,
+        "image_paths": image_paths,
+    }
