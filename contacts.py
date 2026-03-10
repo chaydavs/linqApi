@@ -53,6 +53,20 @@ def _load() -> None:
 _load()
 
 
+def clear_user_data(user_phone: str) -> int:
+    """Remove all contacts and profile for a user. Returns count of contacts removed."""
+    with _lock:
+        ids = user_contacts.pop(user_phone, [])
+        count = 0
+        for cid in ids:
+            if cid in contacts:
+                del contacts[cid]
+                count += 1
+        rep_profiles.pop(user_phone, None)
+        _save()
+    return count
+
+
 def get_rep_profile(user_phone: str) -> Optional[dict]:
     """Get rep profile, or None if not onboarded."""
     with _lock:
