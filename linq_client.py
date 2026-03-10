@@ -102,7 +102,7 @@ def send_image_reply(chat_id: str, image_url: str) -> dict[str, Any]:
     url = f"{LINQ_BASE_URL}/chats/{chat_id}/messages"
     payload: dict[str, Any] = {
         "message": {
-            "parts": [{"type": "media", "value": image_url}],
+            "parts": [{"type": "media", "url": image_url}],
         }
     }
 
