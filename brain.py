@@ -155,21 +155,25 @@ CRITICAL rules:
 
 def classify_intent(text: str, contact_names: Optional[list[str]] = None) -> dict[str, str]:
     """Classify user message intent using Claude."""
-    context = ""
-    if contact_names:
-        context = f"\n\nExisting contacts the user has logged: {', '.join(contact_names)}"
-
-    raw = _call_claude(
-        INTENT_SYSTEM_PROMPT,
-        f"Classify this message:{context}\n\n\"{text}\"",
-        max_tokens=200,
-    )
-    cleaned = _clean_json_response(raw)
+    _fallback: dict[str, str] = {"intent": "brain_dump", "name": "", "hint": "", "reply": ""}
     try:
+        context = ""
+        if contact_names:
+            context = f"\n\nExisting contacts the user has logged: {', '.join(contact_names)}"
+
+        raw = _call_claude(
+            INTENT_SYSTEM_PROMPT,
+            f"Classify this message:{context}\n\n\"{text}\"",
+            max_tokens=200,
+        )
+        cleaned = _clean_json_response(raw)
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        logger.warning("Intent classification failed, defaulting to brain_dump")
-        return {"intent": "brain_dump", "name": "", "hint": "", "reply": ""}
+        logger.warning("Intent classification JSON parse failed, defaulting to brain_dump")
+        return _fallback
+    except Exception:
+        logger.exception("Intent classification failed (API error), defaulting to brain_dump")
+        return _fallback
 
 
 def parse_brain_dump(raw_text: str) -> dict[str, Any]:
