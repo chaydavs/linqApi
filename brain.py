@@ -34,28 +34,36 @@ Extract and return ONLY valid JSON with these fields:
 }
 
 Rules:
-- If information isn't mentioned, use empty string or empty array
-- Infer title/role from context clues if not explicitly stated
+- ONLY extract information that is EXPLICITLY stated in the text. Do NOT infer, guess, or fabricate any details.
+- If information isn't mentioned, use empty string or empty array — NEVER fill in made-up data
+- Do NOT add personal details, interests, or notes that the user did not explicitly say
 - "Follow up Thursday" means follow_up_date = "Thursday"
-- Keep notes concise but preserve all business-relevant context
-- Personal details are GOLD - these make follow-ups feel real
+- Keep notes concise but preserve all business-relevant context that was ACTUALLY mentioned
+- Personal details must come from the text — do not invent family members, hobbies, or interests
 - Return ONLY the JSON object. No markdown. No explanation. No code fences."""
 
 
 DRAFT_SYSTEM_PROMPT = """You are a follow-up message writer. You write short, casual,
-human-sounding iMessages that a salesperson would send after meeting someone at a conference.
+human-sounding iMessages that a salesperson (the SENDER) would send after meeting someone (the CONTACT) at a conference.
+
+IMPORTANT — perspective:
+- The SENDER is writing this message. The SENDER's name is in the "Sender" section below.
+- The CONTACT is the person being written TO. Their personal details (family, school, hobbies) belong to THEM.
+- Example: if contact's personal details say "husband went to VT" — that means the CONTACT's husband went to VT, NOT the sender's.
+- Write FROM the sender's perspective, referencing the contact's personal details as things the sender LEARNED about the contact.
 
 Rules:
 - Sound like a REAL PERSON texting, not a corporation
 - Keep it under 3-4 sentences max
-- Reference something personal from the conversation (school connection, shared interest, joke you shared)
+- Reference something personal you learned about the CONTACT (their school connections, their family, their interests)
 - Reference the specific business context or what you promised to send
 - Include a clear but soft call to action
 - No "I hope this message finds you well" - nobody texts like that
 - No formal sign-offs - it's iMessage, not email
 - Match the energy: if the meeting was casual, keep it casual. If it was business-focused, be direct.
-- If you know the sender's name, sign naturally (e.g. "- Chay" or just use first person)
+- Sign with the SENDER's first name (e.g. "- Sai")
 - If you know the sender's company/product, reference it naturally where relevant
+- ONLY reference facts that are provided in the data. Do NOT make up details.
 
 You will receive the contact's structured data and the sender's profile. Write ONLY the message text. Nothing else."""
 
@@ -151,7 +159,8 @@ CRITICAL rules:
 - If someone mentions a person's name WITH details about them (company, role, what they discussed, interests), it's brain_dump
 - If someone just says a name or asks for something about a name, it's draft (they want to see that contact)
 - "Yeah give me X" / "show me X" / "what about X" → draft, with name = X
-- Short casual messages (hi, thanks, cool, ok) are NEVER brain_dump
+- Short casual messages (hi, thanks, cool, ok, clear) are NEVER brain_dump
+- "clear", "reset", "restart" should be classified as conversational
 - A message needs SUBSTANTIAL contact info to be a brain_dump — just a name alone is NOT enough
 - For QUESTION intent: actually answer the question! Be the rep's smartest friend.
   FORMAT RULES for question replies:

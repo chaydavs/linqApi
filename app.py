@@ -117,7 +117,7 @@ def _fast_path_route(text_lower: str) -> str:
         return "edit"
     if text_lower.startswith("/setup"):
         return "setup"
-    if text_lower in ("/restart", "restart", "/reset", "reset"):
+    if text_lower in ("/restart", "restart", "/reset", "reset", "clear"):
         return "restart"
     if _is_visual_send(text_lower):
         return "visual_send"

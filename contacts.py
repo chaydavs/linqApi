@@ -208,11 +208,20 @@ def find_and_merge_contact(user_phone: str, parsed_data: dict) -> tuple[dict, bo
         merged = list(old_details) + [d for d in new_details if d.lower() not in old_set]
         updates["personal_details"] = merged
 
-    # Merge notes — append if new info
+    # Merge notes — replace with new if substantially different, don't pile up duplicates
     new_notes = parsed_data.get("notes", "")
     old_notes = existing.get("notes", "")
     if new_notes and old_notes and new_notes != old_notes:
-        updates["notes"] = f"{old_notes}; {new_notes}"
+        # If new notes contain most of old info, just use the new (fresher) version
+        # Otherwise append only genuinely new info
+        old_keywords = set(old_notes.lower().split())
+        new_keywords = set(new_notes.lower().split())
+        overlap = len(old_keywords & new_keywords) / max(len(old_keywords), 1)
+        if overlap > 0.5:
+            # High overlap — use the newer, fresher notes
+            updates["notes"] = new_notes
+        else:
+            updates["notes"] = f"{old_notes}; {new_notes}"
 
     if updates:
         updated = update_contact(existing["id"], **updates)
