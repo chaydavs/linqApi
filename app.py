@@ -54,6 +54,40 @@ last_draft_shown = {}  # sender_phone -> contact_id
 # Track pending visual deck confirmations
 _visual_pending = {}  # sender_phone -> {"contact_id": str, "hint": str}
 
+# Conversation memory — stores suggestions and advice per user
+# Each entry: {"topic": str, "contact_name": str, "reply": str, "timestamp": str}
+_conversation_memory: dict[str, list[dict[str, str]]] = {}
+_MEMORY_MAX_PER_USER = 50
+
+
+def _store_memory(sender: str, topic: str, reply: str, contact_name: str = "") -> None:
+    """Store a suggestion/advice in conversation memory."""
+    if sender not in _conversation_memory:
+        _conversation_memory[sender] = []
+    _conversation_memory[sender].append({
+        "topic": topic,
+        "contact_name": contact_name,
+        "reply": reply,
+        "timestamp": datetime.now().isoformat(),
+    })
+    # Keep bounded
+    if len(_conversation_memory[sender]) > _MEMORY_MAX_PER_USER:
+        _conversation_memory[sender] = _conversation_memory[sender][-_MEMORY_MAX_PER_USER:]
+
+
+def _get_memory_context(sender: str) -> str:
+    """Build a short context string from recent conversation memory."""
+    entries = _conversation_memory.get(sender, [])
+    if not entries:
+        return ""
+    # Last 10 entries, most recent first
+    recent = entries[-10:][::-1]
+    lines = []
+    for e in recent:
+        contact_tag = f" (re: {e['contact_name']})" if e['contact_name'] else ""
+        lines.append(f"- {e['topic']}{contact_tag}: {e['reply'][:120]}")
+    return "\n\nPrevious suggestions/advice you gave this user:\n" + "\n".join(lines)
+
 
 def _format_draft_preview(contact: dict, footer: str) -> str:
     """Build the draft preview message shown to the user."""
@@ -208,7 +242,8 @@ def process_message(chat_id: str, sender: str, text: str, message_id: str, attac
         # No fast match — use Claude to classify intent
         user_contacts = get_user_contacts(sender)
         contact_names = [c["name"] for c in user_contacts]
-        intent_result = classify_intent(text, contact_names)
+        memory_context = _get_memory_context(sender)
+        intent_result = classify_intent(text, contact_names, memory_context=memory_context)
         intent = intent_result.get("intent") or "brain_dump"
         name = (intent_result.get("name") or "").strip()
         reply_text = intent_result.get("reply") or ""
@@ -251,6 +286,8 @@ def process_message(chat_id: str, sender: str, text: str, message_id: str, attac
 
         elif intent == "question":
             if reply_text:
+                # Store in conversation memory for later recall
+                _store_memory(sender, text.strip()[:80], reply_text, contact_name=name)
                 send_reply(chat_id, reply_text)
             else:
                 send_reply(chat_id, "I'm not sure — try 'contacts' to see your list or 'help' for commands.")
@@ -334,6 +371,7 @@ def handle_restart(chat_id: str, sender: str):
     count = clear_user_data(sender)
     _onboarding_pending.discard(sender)
     _visual_pending.pop(sender, None)
+    _conversation_memory.pop(sender, None)
     with _draft_lock:
         last_draft_shown.pop(sender, None)
 

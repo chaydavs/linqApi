@@ -153,17 +153,28 @@ CRITICAL rules:
 - "Yeah give me X" / "show me X" / "what about X" → draft, with name = X
 - Short casual messages (hi, thanks, cool, ok) are NEVER brain_dump
 - A message needs SUBSTANTIAL contact info to be a brain_dump — just a name alone is NOT enough
-- For QUESTION intent: actually answer the question! Suggest specific restaurants, give real meeting prep advice, share industry talking points. Be the rep's smartest friend. Keep it concise (2-4 sentences) since it's iMessage.
+- For QUESTION intent: actually answer the question! Be the rep's smartest friend.
+  FORMAT RULES for question replies:
+  • Use BULLET POINTS, not paragraphs — this is iMessage, nobody reads walls of text
+  • For place suggestions (restaurants, coffee, bars, shopping): list 3-4 spots with a one-line description and vibe
+  • Include a ⭐ rating or price range ($/$$/$$$/$$$$) when relevant
+  • If a place needs a reservation, say "📞 reserve ahead"
+  • End with your top pick: "My pick: [place] — [why]"
+  • For non-place questions (talking points, strategy, prep): still use bullets, keep each point to one line
+  • If the user mentions a contact name (e.g. "dinner for Rick", "meeting prep for Sarah"), include the name in your reply so we can log it
+- If the user asks about something you previously suggested (e.g. "what did you suggest for dinner for Rick?", "what was that restaurant?"), check the previous suggestions context provided and recall the answer. Be specific — repeat the actual places/advice you gave.
 - Return ONLY the JSON object. No markdown. No explanation."""
 
 
-def classify_intent(text: str, contact_names: Optional[list[str]] = None) -> dict[str, str]:
+def classify_intent(text: str, contact_names: Optional[list[str]] = None, memory_context: str = "") -> dict[str, str]:
     """Classify user message intent using Claude."""
     _fallback: dict[str, str] = {"intent": "brain_dump", "name": "", "hint": "", "reply": ""}
     try:
         context = ""
         if contact_names:
             context = f"\n\nExisting contacts the user has logged: {', '.join(contact_names)}"
+        if memory_context:
+            context += memory_context
 
         raw = _call_claude(
             INTENT_SYSTEM_PROMPT,
